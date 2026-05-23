@@ -1,0 +1,753 @@
+(function installXAPMainWorldBridge() {
+  const CHANNEL_TO_MAIN = "xap";
+  const CHANNEL_FROM_MAIN = "xap-main";
+  const BRIDGE_VERSION = "draft-block-write-v1";
+  const EDITOR_SELECTOR =
+    "[data-contents='true'] [contenteditable='true'], [contenteditable='true'][role='textbox'], [contenteditable='true'].public-DraftEditor-content, [contenteditable='true']";
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  function post(kind, payload = {}) {
+    window.postMessage({ source: CHANNEL_FROM_MAIN, kind, ...payload }, "*");
+  }
+
+  function progress(text, level = "work") {
+    post("progress", { text, level });
+  }
+
+  function findEditorElement() {
+    for (const element of document.querySelectorAll(EDITOR_SELECTOR)) {
+      const rect = element.getBoundingClientRect();
+      if (rect.width > 200 && rect.height > 80) return element;
+    }
+    return null;
+  }
+
+  function reactFiberKey(element) {
+    return Object.keys(element || {}).find(
+      (key) => key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$"),
+    );
+  }
+
+  function findDraftStateNode() {
+    const editor = findEditorElement();
+    const key = reactFiberKey(editor);
+    if (!key) return null;
+
+    let fiber = editor[key];
+    for (let depth = 0; depth < 80 && fiber; depth += 1) {
+      const stateNode = fiber.stateNode;
+      if (stateNode?.props?.editorState && typeof stateNode.props.onChange === "function") {
+        return stateNode;
+      }
+      fiber = fiber.return;
+    }
+    return null;
+  }
+
+  function findOnFilesAdded() {
+    const editor = findEditorElement();
+    const key = reactFiberKey(editor);
+    if (!key) return null;
+
+    let fiber = editor[key];
+    for (let depth = 0; depth < 160 && fiber; depth += 1) {
+      const props = fiber.memoizedProps || fiber.stateNode?.props;
+      if (typeof props?.onFilesAdded === "function") return props.onFilesAdded;
+      const nested = findOnFilesAddedInFiberChildren(fiber.child, 0);
+      if (nested) return nested;
+      fiber = fiber.return;
+    }
+    return null;
+  }
+
+  function findOnFilesAddedInFiberChildren(fiber, depth) {
+    if (!fiber || depth > 8) return null;
+    const props = fiber.memoizedProps || fiber.stateNode?.props;
+    if (typeof props?.onFilesAdded === "function") return props.onFilesAdded;
+    return (
+      findOnFilesAddedInFiberChildren(fiber.child, depth + 1) ||
+      findOnFilesAddedInFiberChildren(fiber.sibling, depth)
+    );
+  }
+
+  function pasteHtml(html, plain) {
+    const editor = findEditorElement();
+    if (!editor) return false;
+    editor.focus();
+    const data = new DataTransfer();
+    data.setData("text/html", html);
+    data.setData("text/plain", plain || html.replace(/<[^>]*>/g, ""));
+    const event = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: data,
+    });
+    if (event.clipboardData !== data) {
+      Object.defineProperty(event, "clipboardData", { value: data });
+    }
+    editor.dispatchEvent(event);
+    return true;
+  }
+
+  function firstCharacterMetadata(block, requireStyle = false) {
+    const characterList = block?.getCharacterList?.();
+    if (!characterList) return null;
+    const size =
+      typeof characterList.size === "number"
+        ? characterList.size
+        : typeof characterList.count === "function"
+          ? characterList.count()
+          : 0;
+    for (let index = 0; index < size; index += 1) {
+      const character = characterList.get?.(index);
+      if (character?.set && (!requireStyle || character.getStyle)) return character;
+    }
+    const first = characterList.first?.() || characterList.get?.(0);
+    return first?.set && (!requireStyle || first.getStyle) ? first : null;
+  }
+
+  function findDraftCharacterSample(draftNode) {
+    const blockMap = draftNode?.props?.editorState?.getCurrentContent?.()?.getBlockMap?.();
+    if (!blockMap?.forEach) return null;
+    let found = null;
+    blockMap.forEach((block) => {
+      if (found) return false;
+      const character = firstCharacterMetadata(block, true);
+      if (character) {
+        found = { block, character };
+        return false;
+      }
+      return true;
+    });
+    return found;
+  }
+
+  function findDraftSampleBlock(draftNode) {
+    return findDraftCharacterSample(draftNode)?.block || null;
+  }
+
+  async function ensureDraftCharacterSample(draftNode) {
+    if (findDraftSampleBlock(draftNode)) return draftNode;
+    const editor = findEditorElement();
+    if (!editor) return draftNode;
+
+    editor.focus();
+    document.execCommand("insertText", false, "x");
+
+    const deadline = Date.now() + 1600;
+    while (Date.now() < deadline) {
+      await sleep(80);
+      const latestNode = findDraftStateNode() || draftNode;
+      if (findDraftSampleBlock(latestNode)) return latestNode;
+    }
+    return findDraftStateNode() || draftNode;
+  }
+
+  function draftInlineStyleName(style) {
+    return (
+      {
+        Bold: "BOLD",
+        Italic: "ITALIC",
+        Strikethrough: "STRIKETHROUGH",
+        Code: "CODE",
+      }[style] || style
+    );
+  }
+
+  function writeDraftBlocks(draftNode, blocks) {
+    if (!Array.isArray(blocks) || !blocks.length) {
+      return { ok: false, error: "No structured blocks" };
+    }
+
+    const editorState = draftNode.props.editorState;
+    const EditorState = editorState.constructor;
+    const SelectionState = editorState.getSelection().constructor;
+    const contentState = editorState.getCurrentContent();
+    const blockMap = contentState.getBlockMap();
+    const sample = findDraftCharacterSample(draftNode);
+    const sampleBlock = sample?.block || null;
+    const sampleCharacter = sample?.character || null;
+    if (!sampleBlock || !sampleCharacter) {
+      return { ok: false, error: "No Draft.js character sample for structured write" };
+    }
+
+    const BlockMap = blockMap.constructor;
+    const CharacterList = sampleBlock.getCharacterList().constructor;
+    let nextContent = contentState;
+    let nextBlockMap = BlockMap();
+    const createdKeys = [];
+
+    for (let index = 0; index < blocks.length; index += 1) {
+      const block = blocks[index] || {};
+      const text = String(block.text || "").replace(/\n+/g, " ");
+      const key = `${Math.random().toString(36).slice(2, 7)}${index.toString(36)}`;
+      let characterList = CharacterList();
+      const entityRanges = new Map();
+
+      for (const link of block.links || []) {
+        const offset = Number(link.offset) || 0;
+        const length = Math.max(0, Number(link.length) || 0);
+        if (!length || !link.url) continue;
+        nextContent = nextContent.createEntity("LINK", "MUTABLE", {
+          url: String(link.url),
+        });
+        entityRanges.set(`${offset}:${offset + length}`, nextContent.getLastCreatedEntityKey());
+      }
+
+      for (let charIndex = 0; charIndex < text.length; charIndex += 1) {
+        const styleNames = (block.inlineStyleRanges || [])
+          .filter((range) => charIndex >= range.offset && charIndex < range.offset + range.length)
+          .map((range) => draftInlineStyleName(range.style))
+          .filter(Boolean);
+        let entity = null;
+        for (const [range, entityKey] of entityRanges.entries()) {
+          const [start, end] = range.split(":").map(Number);
+          if (charIndex >= start && charIndex < end) {
+            entity = entityKey;
+            break;
+          }
+        }
+        let style = sampleCharacter.getStyle().clear();
+        for (const styleName of styleNames) style = style.add(styleName);
+        characterList = characterList.push(
+          sampleCharacter.set("style", style).set("entity", entity),
+        );
+      }
+
+      const nextBlock = sampleBlock.merge({
+        key,
+        type: block.type || "unstyled",
+        text,
+        characterList,
+        depth: block.type === "unordered-list-item" || block.type === "ordered-list-item" ? 0 : 0,
+        data: sampleBlock.getData?.()?.clear?.() || sampleBlock.getData?.(),
+      });
+      nextBlockMap = nextBlockMap.set(key, nextBlock);
+      createdKeys.push(key);
+    }
+
+    if (!createdKeys.length) return { ok: false, error: "No Draft.js blocks created" };
+    const lastKey = createdKeys[createdKeys.length - 1];
+    const selection = SelectionState.createEmpty(lastKey);
+    const nextState = nextContent
+      .set("blockMap", nextBlockMap)
+      .set("selectionBefore", selection)
+      .set("selectionAfter", selection);
+    let nextEditorState = EditorState.push(editorState, nextState, "insert-fragment");
+    nextEditorState = EditorState.moveSelectionToEnd(nextEditorState);
+    draftNode.props.onChange(nextEditorState);
+    return { ok: true, blocks: createdKeys.length };
+  }
+
+  function findMarkerBlock(contentState, marker) {
+    let blockKey = null;
+    contentState.getBlockMap().forEach((block, key) => {
+      if (blockKey) return false;
+      if (block.getType() !== "atomic" && (block.getText() || "").trim() === marker) {
+        blockKey = key;
+        return false;
+      }
+      return true;
+    });
+    return blockKey;
+  }
+
+  function countMarkerBlocks(draftNode, markerPrefix) {
+    if (!draftNode || !markerPrefix) return 0;
+    let count = 0;
+    draftNode.props.editorState
+      .getCurrentContent()
+      .getBlockMap()
+      .forEach((block) => {
+        if (block.getType() !== "atomic" && (block.getText() || "").trim().startsWith(markerPrefix)) {
+          count += 1;
+        }
+      });
+    return count;
+  }
+
+  async function waitForMarkers(markerPrefix, expectedCount, timeoutMs = 30000) {
+    const deadline = Date.now() + timeoutMs;
+    let latestNode = findDraftStateNode();
+    let latestCount = countMarkerBlocks(latestNode, markerPrefix);
+    while (Date.now() < deadline) {
+      latestNode = findDraftStateNode() || latestNode;
+      latestCount = countMarkerBlocks(latestNode, markerPrefix);
+      if (latestNode && latestCount >= expectedCount) {
+        return { ok: true, draftNode: latestNode, count: latestCount };
+      }
+      await sleep(120);
+    }
+    latestNode = findDraftStateNode() || latestNode;
+    latestCount = countMarkerBlocks(latestNode, markerPrefix);
+    return { ok: false, draftNode: latestNode, count: latestCount };
+  }
+
+  async function waitForMarkerCountAtMost(
+    markerPrefix,
+    maxCount,
+    timeoutMs = 12000,
+    stableMs = 2500,
+  ) {
+    const deadline = Date.now() + timeoutMs;
+    let latestNode = findDraftStateNode();
+    let latestCount = countMarkerBlocks(latestNode, markerPrefix);
+    let stableSince = latestCount <= maxCount ? Date.now() : null;
+    while (Date.now() < deadline) {
+      latestNode = findDraftStateNode() || latestNode;
+      latestCount = countMarkerBlocks(latestNode, markerPrefix);
+      if (latestNode && latestCount <= maxCount) {
+        stableSince ||= Date.now();
+      } else {
+        stableSince = null;
+      }
+      if (latestNode && stableSince && Date.now() - stableSince >= stableMs) {
+        return { ok: true, draftNode: latestNode, count: latestCount };
+      }
+      await sleep(150);
+    }
+    latestNode = findDraftStateNode() || latestNode;
+    latestCount = countMarkerBlocks(latestNode, markerPrefix);
+    return { ok: false, draftNode: latestNode, count: latestCount };
+  }
+
+  async function waitForSelectionAtBlock(blockKey, timeoutMs = 3000) {
+    const deadline = Date.now() + timeoutMs;
+    let latestNode = findDraftStateNode();
+    while (Date.now() < deadline) {
+      latestNode = findDraftStateNode() || latestNode;
+      const selection = latestNode?.props?.editorState?.getSelection?.();
+      if (
+        selection &&
+        selection.getAnchorKey?.() === blockKey &&
+        selection.getFocusKey?.() === blockKey
+      ) {
+        return { ok: true, draftNode: latestNode };
+      }
+      await sleep(80);
+    }
+    return { ok: false, draftNode: latestNode };
+  }
+
+  function placeSelectionAtMarker(draftNode, marker) {
+    const editorState = draftNode.props.editorState;
+    const SelectionState = editorState.getSelection().constructor;
+    const EditorState = editorState.constructor;
+    const contentState = editorState.getCurrentContent();
+    const blockKey = findMarkerBlock(contentState, marker);
+    if (!blockKey) return false;
+    findEditorElement()?.focus();
+    const selection = SelectionState.createEmpty(blockKey).merge({
+      anchorOffset: 0,
+      focusOffset: 0,
+    });
+    draftNode.props.onChange(EditorState.forceSelection(editorState, selection));
+    return blockKey;
+  }
+
+  function existingMediaEntities(contentState) {
+    const entities = new Set();
+    contentState.getBlockMap().forEach((block) => {
+      if (block.getType() !== "atomic") return;
+      block.findEntityRanges(
+        (character) => Boolean(character.getEntity()),
+        (start) => {
+          const entityKey = block.getCharacterList().get(start)?.getEntity?.();
+          if (!entityKey) return;
+          try {
+            if (contentState.getEntity(entityKey).getType() === "MEDIA") entities.add(entityKey);
+          } catch {}
+        },
+      );
+    });
+    return entities;
+  }
+
+  function mediaBlockDetails(draftNode, protectedAtomicBlocks = new Set()) {
+    const details = [];
+    if (!draftNode) return details;
+    const contentState = draftNode.props.editorState.getCurrentContent();
+    contentState.getBlockMap().forEach((block, blockKey) => {
+      if (protectedAtomicBlocks.has(blockKey) || !isMediaBlock(contentState, block)) return;
+      let firstEntity = null;
+      block.findEntityRanges(
+        (character) => Boolean(character.getEntity()),
+        (start) => {
+          const entityKey = block.getCharacterList().get(start)?.getEntity?.();
+          if (entityKey) firstEntity ||= entityKey;
+        },
+      );
+      details.push({ blockKey, entityKey: firstEntity });
+    });
+    return details;
+  }
+
+  async function waitForStableMediaCount(
+    protectedAtomicBlocks,
+    minCount,
+    { timeoutMs = 45000, stableMs = 1400 } = {},
+  ) {
+    const deadline = Date.now() + timeoutMs;
+    let latestNode = findDraftStateNode();
+    let latestDetails = mediaBlockDetails(latestNode, protectedAtomicBlocks);
+    let lastCount = latestDetails.length;
+    let stableSince = Date.now();
+
+    while (Date.now() < deadline) {
+      await sleep(350);
+      latestNode = findDraftStateNode() || latestNode;
+      latestDetails = mediaBlockDetails(latestNode, protectedAtomicBlocks);
+      if (latestDetails.length !== lastCount) {
+        lastCount = latestDetails.length;
+        stableSince = Date.now();
+      }
+      if (latestDetails.length >= minCount && Date.now() - stableSince >= stableMs) {
+        return {
+          ok: true,
+          draftNode: latestNode,
+          count: latestDetails.length,
+          details: latestDetails,
+        };
+      }
+    }
+
+    latestNode = findDraftStateNode() || latestNode;
+    latestDetails = mediaBlockDetails(latestNode, protectedAtomicBlocks);
+    return {
+      ok: false,
+      draftNode: latestNode,
+      count: latestDetails.length,
+      details: latestDetails,
+    };
+  }
+
+  function base64ToFile(base64, fileName, mime) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new File([bytes], fileName, { type: mime });
+  }
+
+  function requestPreparedFile(operation, timeoutMs = 30000) {
+    const token = operation?.file?.token || operation?.marker || "";
+    if (operation?.file?.base64) return Promise.resolve(operation.file);
+    if (!token) return Promise.reject(new Error("Prepared image token is missing"));
+
+    const requestId = `xap_file_${Math.random().toString(36).slice(2, 10)}`;
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        window.removeEventListener("message", listener);
+        reject(new Error("Prepared image data did not arrive"));
+      }, timeoutMs);
+
+      const listener = (event) => {
+        if (event.source !== window || event.data?.source !== CHANNEL_TO_MAIN) return;
+        const message = event.data;
+        if (message.kind !== "file-response" || message.requestId !== requestId) return;
+        clearTimeout(timeout);
+        window.removeEventListener("message", listener);
+        if (message.ok && message.file?.base64) resolve(message.file);
+        else reject(new Error(message.error || "Prepared image data was not available"));
+      };
+
+      window.addEventListener("message", listener);
+      post("file-request", { requestId, token, marker: operation.marker });
+    });
+  }
+
+  async function uploadImageAtMarker(draftNode, operation, protectedAtomicBlocks = new Set()) {
+    const stableBefore = await waitForStableMediaCount(protectedAtomicBlocks, 0, {
+      timeoutMs: 12000,
+      stableMs: 900,
+    });
+    draftNode = stableBefore.draftNode || draftNode;
+    const beforeMediaCount = stableBefore.count || 0;
+
+    const preparedFile = await requestPreparedFile(operation);
+    const file = base64ToFile(preparedFile.base64, preparedFile.fileName, preparedFile.mime);
+    draftNode = findDraftStateNode() || draftNode;
+    const markerBlockKey = placeSelectionAtMarker(draftNode, operation.marker);
+    if (!markerBlockKey) {
+      return { ok: false, error: `Marker not found: ${operation.marker}` };
+    }
+
+    const selectionReady = await waitForSelectionAtBlock(markerBlockKey);
+    draftNode = selectionReady.draftNode || draftNode;
+    if (!selectionReady.ok) {
+      return { ok: false, error: `Marker selection did not settle: ${operation.marker}` };
+    }
+
+    const onFilesAdded = findOnFilesAdded();
+    if (!onFilesAdded) return { ok: false, error: "X upload handler was not reachable" };
+
+    const before = existingMediaEntities(draftNode.props.editorState.getCurrentContent());
+    onFilesAdded([file]);
+    const deadline = Date.now() + 45000;
+    while (Date.now() < deadline) {
+      await sleep(350);
+      draftNode = findDraftStateNode() || draftNode;
+      const contentState = draftNode.props.editorState.getCurrentContent();
+      const currentMediaCount = mediaBlockDetails(draftNode, protectedAtomicBlocks).length;
+      let found = null;
+      contentState.getBlockMap().forEach((block, blockKey) => {
+        if (found || block.getType() !== "atomic") return;
+        block.findEntityRanges(
+          (character) => Boolean(character.getEntity()),
+          (start) => {
+            const entityKey = block.getCharacterList().get(start)?.getEntity?.();
+            if (!entityKey || before.has(entityKey)) return;
+            try {
+              const entity = contentState.getEntity(entityKey);
+              if (entity.getType() !== "MEDIA") return;
+              found = { entityKey, blockKey };
+            } catch {}
+          },
+        );
+      });
+      if (found && currentMediaCount > beforeMediaCount) {
+        const stableAfter = await waitForStableMediaCount(
+          protectedAtomicBlocks,
+          beforeMediaCount + 1,
+          { timeoutMs: 45000, stableMs: 1400 },
+        );
+        if (stableAfter.ok) return { ok: true, ...found };
+      }
+    }
+
+    return { ok: false, error: "Timed out waiting for X media upload" };
+  }
+
+  function isMediaBlock(contentState, block) {
+    if (block?.getType?.() !== "atomic") return false;
+    let media = false;
+    block.findEntityRanges(
+      (character) => Boolean(character.getEntity()),
+      (start) => {
+        const entityKey = block.getCharacterList().get(start)?.getEntity?.();
+        if (!entityKey) return;
+        try {
+          if (contentState.getEntity(entityKey).getType() === "MEDIA") media = true;
+        } catch {}
+      },
+    );
+    return media;
+  }
+
+  function relocateImages(draftNode, uploads, protectedAtomicBlocks = new Set()) {
+    if (!uploads.length) return { moved: 0, missing: 0 };
+    const editorState = draftNode.props.editorState;
+    const EditorState = editorState.constructor;
+    const SelectionState = editorState.getSelection().constructor;
+    const contentState = editorState.getCurrentContent();
+    const blockMap = contentState.getBlockMap();
+    const markerEntries = new Map(uploads.map((upload) => [upload.marker, upload]));
+    const entityToBlock = new Map();
+    const mediaBlocks = [];
+
+    blockMap.forEach((block, blockKey) => {
+      if (block.getType() === "atomic") {
+        let firstEntity = null;
+        block.findEntityRanges(
+          (character) => Boolean(character.getEntity()),
+          (start) => {
+            const entityKey = block.getCharacterList().get(start)?.getEntity?.();
+            if (entityKey) {
+              firstEntity ||= entityKey;
+              entityToBlock.set(entityKey, blockKey);
+            }
+          },
+        );
+        if (!protectedAtomicBlocks.has(blockKey) && firstEntity && isMediaBlock(contentState, block)) {
+          mediaBlocks.push({ blockKey, entityKey: firstEntity });
+        }
+        return;
+      }
+      const marker = (block.getText() || "").trim();
+      if (markerEntries.has(marker)) markerEntries.get(marker).markerBlock = blockKey;
+    });
+
+    const moves = new Map();
+    const usedImageBlocks = new Set();
+    let missing = 0;
+    let fallbackIndex = 0;
+    for (const upload of uploads) {
+      if (!upload.markerBlock) {
+        missing += 1;
+        continue;
+      }
+      let imageBlock = upload.entityKey ? entityToBlock.get(upload.entityKey) : null;
+      if (!imageBlock && upload.blockKey && blockMap.has(upload.blockKey) && isMediaBlock(contentState, blockMap.get(upload.blockKey))) {
+        imageBlock = upload.blockKey;
+      }
+      if (!imageBlock) {
+        while (fallbackIndex < mediaBlocks.length && usedImageBlocks.has(mediaBlocks[fallbackIndex].blockKey)) {
+          fallbackIndex += 1;
+        }
+        imageBlock = mediaBlocks[fallbackIndex]?.blockKey || null;
+        fallbackIndex += 1;
+      }
+      if (!imageBlock) {
+        missing += 1;
+        continue;
+      }
+      if (imageBlock !== upload.markerBlock) moves.set(upload.markerBlock, imageBlock);
+      usedImageBlocks.add(imageBlock);
+    }
+
+    if (!moves.size) return { moved: 0, missing, mediaBlocks: mediaBlocks.length };
+    const destinationBlocks = new Set(moves.values());
+    const orderedKeys = [];
+    blockMap.forEach((_block, key) => {
+      if (moves.has(key)) orderedKeys.push(moves.get(key));
+      else if (!destinationBlocks.has(key)) orderedKeys.push(key);
+    });
+
+    let nextBlockMap = blockMap.constructor();
+    for (const key of orderedKeys) nextBlockMap = nextBlockMap.set(key, blockMap.get(key));
+    const lastKey = orderedKeys[orderedKeys.length - 1];
+    const selection = SelectionState.createEmpty(lastKey);
+    const nextContent = contentState
+      .set("blockMap", nextBlockMap)
+      .set("selectionBefore", selection)
+      .set("selectionAfter", selection);
+    let nextEditorState = EditorState.push(editorState, nextContent, "remove-range");
+    nextEditorState = EditorState.moveSelectionToEnd(nextEditorState);
+    draftNode.props.onChange(nextEditorState);
+    return { moved: moves.size, missing, mediaBlocks: mediaBlocks.length };
+  }
+
+  async function runFlow(payload) {
+    const imageOps = payload.images || [];
+    let draftNode = findDraftStateNode();
+    const existingMarkers = countMarkerBlocks(draftNode, payload.markerPrefix);
+
+    if (existingMarkers >= imageOps.length && imageOps.length > 0) {
+      progress("检测到正文 marker 已存在，直接继续上传图片...");
+    } else {
+      progress("正在通过 Draft.js 写入正文和图片 marker...");
+      draftNode = await ensureDraftCharacterSample(draftNode);
+      const writeResult = writeDraftBlocks(draftNode, payload.blocks);
+      if (!writeResult.ok) {
+        progress("结构化写入失败，改用 HTML 粘贴兜底...", "warn");
+        if (!pasteHtml(payload.html, payload.plain)) {
+          throw new Error("X editor was not reachable for paste");
+        }
+      }
+    }
+
+    const markerWait = await waitForMarkers(payload.markerPrefix, imageOps.length);
+    draftNode = markerWait.draftNode;
+    if (!draftNode) throw new Error("X Draft.js editor was not reachable");
+    if (imageOps.length > 0 && markerWait.count < imageOps.length) {
+      throw new Error(
+        `正文 marker 未完整写入：检测到 ${markerWait.count}/${imageOps.length}。请刷新页面后重试。`,
+      );
+    }
+
+    const uploads = [];
+    const protectedAtomicBlocks = new Set();
+    draftNode.props.editorState
+      .getCurrentContent()
+      .getBlockMap()
+      .forEach((block, key) => {
+        if (block.getType() === "atomic") protectedAtomicBlocks.add(key);
+      });
+    const summary = {
+      imgOk: 0,
+      imgFail: 0,
+      relocatedImages: 0,
+      markerCleanupSkipped: false,
+      imageErrors: [],
+    };
+
+    for (let index = 0; index < imageOps.length; index += 1) {
+      const op = imageOps[index];
+      draftNode = findDraftStateNode() || draftNode;
+      progress(`正在上传图片 ${index + 1}/${imageOps.length}: ${op.marker}`);
+      let result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks);
+      if (!result.ok && /timed out/i.test(result.error || "")) {
+        progress(`图片 ${index + 1} 上传超时，正在重试...`, "warn");
+        await sleep(1400);
+        draftNode = findDraftStateNode() || draftNode;
+        result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks);
+      }
+      if (result.ok) {
+        summary.imgOk += 1;
+        uploads.push({
+          marker: op.marker,
+          blockKey: result.blockKey,
+          entityKey: result.entityKey,
+        });
+      } else {
+        summary.imgFail += 1;
+        summary.imageErrors.push({
+          marker: op.marker,
+          error: result.error || "Image upload failed",
+        });
+      }
+    }
+
+    if (uploads.length) {
+      const stableUploads = await waitForStableMediaCount(
+        protectedAtomicBlocks,
+        uploads.length,
+        { timeoutMs: 60000, stableMs: 2200 },
+      );
+      draftNode = stableUploads.draftNode || draftNode;
+      summary.stableMediaCount = stableUploads.count;
+      if (!stableUploads.ok) {
+        progress(`图片仍在处理：当前稳定媒体块 ${stableUploads.count}/${uploads.length}`, "warn");
+      }
+      progress("正在把上传后的图片移动到 marker 位置...");
+      await sleep(1600);
+      draftNode = findDraftStateNode() || draftNode;
+      const result = relocateImages(draftNode, uploads, protectedAtomicBlocks);
+      summary.relocatedImages = result.moved;
+      summary.relocationMissing = result.missing;
+      summary.mediaBlocksSeen = result.mediaBlocks;
+      progress(`图片重排完成：移动 ${result.moved}/${uploads.length}，缺失 ${result.missing || 0}`);
+      const confirmation = await waitForMarkerCountAtMost(
+        payload.markerPrefix,
+        0,
+        15000,
+        3500,
+      );
+      summary.relocationConfirmed = confirmation.ok;
+      summary.markerCountAfterRelocation = confirmation.count;
+      draftNode = confirmation.draftNode || findDraftStateNode() || draftNode;
+    }
+
+    draftNode = findDraftStateNode() || draftNode;
+    const markerCount = countMarkerBlocks(draftNode, payload.markerPrefix);
+    if (markerCount === 0) {
+      progress("图片 marker 已处理完成。");
+    } else {
+      summary.markerCleanupSkipped = true;
+      summary.markerCountBeforeSkippedCleanup = markerCount;
+      progress(
+        `跳过 marker 清理：重排状态未确认，当前仍有 ${markerCount} 个 marker。请保留页面并反馈这个数字。`,
+        "warn",
+      );
+    }
+    post("done", { summary });
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window || event.data?.source !== CHANNEL_TO_MAIN) return;
+    if (event.data.kind === "ready?") {
+      post("ready");
+      return;
+    }
+    if (event.data.kind === "run") {
+      runFlow(event.data.payload).catch((error) => {
+        post("error", { error: error?.message || String(error), stack: error?.stack || null });
+      });
+    }
+  });
+
+  window.__XAP_MAIN_VERSION = BRIDGE_VERSION;
+  post("ready", { version: BRIDGE_VERSION });
+})();

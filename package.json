@@ -1,0 +1,19 @@
+{
+  "name": "x-article-publisher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Prepare Feishu/Lark documents as X Articles drafts.",
+  "scripts": {
+    "prepare:feishu": "node src/cli/prepare-feishu-doc.mjs",
+    "helper": "node src/server/local-helper.mjs",
+    "test": "node --test"
+  },
+  "bin": {
+    "xap-prepare-feishu": "src/cli/prepare-feishu-doc.mjs",
+    "xap-helper": "src/server/local-helper.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

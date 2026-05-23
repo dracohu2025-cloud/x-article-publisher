@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "X Article Publisher",
+  "version": "0.1.0",
+  "description": "Prepare Feishu documents for X Articles drafts.",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "permissions": ["clipboardWrite", "storage", "tabs"],
+  "host_permissions": [
+    "http://127.0.0.1:49231/*",
+    "https://x.com/*",
+    "https://twitter.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/compose/articles*", "https://twitter.com/compose/articles*"],
+      "js": ["x-import-plan.js", "content-script.js"]
+    },
+    {
+      "matches": ["https://x.com/compose/articles*", "https://twitter.com/compose/articles*"],
+      "js": ["main-world.js"],
+      "world": "MAIN"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>X Article Publisher</title>
+  </head>
+  <body>
+    <main>
+      <h1>X Article Publisher</h1>
+      <p class="hint">主流程已移到 X Articles 页面右下角面板。</p>
+
+      <div class="actions">
+        <button id="openX" type="button">打开 X Articles</button>
+        <button id="checkHelper" type="button">检查 helper</button>
+      </div>
+
+      <section id="latest" hidden>
+        <h2>最近草稿</h2>
+        <p id="latestTitle"></p>
+        <p id="latestMeta"></p>
+      </section>
+
+      <p id="status" aria-live="polite"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

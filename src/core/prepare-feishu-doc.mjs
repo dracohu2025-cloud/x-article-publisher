@@ -1,0 +1,170 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fetchLarkDoc, downloadLarkMedia } from "./lark-cli.mjs";
+import { normalizeLarkMarkdown } from "./normalize-lark-markdown.mjs";
+
+function slugify(value) {
+  return String(value)
+    .normalize("NFKD")
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72) || "untitled";
+}
+
+function timestamp() {
+  return new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z");
+}
+
+async function findDownloadedFile(outputBase) {
+  const dir = path.dirname(outputBase);
+  const base = path.basename(outputBase);
+  const files = await fs.readdir(dir);
+  const match = files.find((file) => file === base || file.startsWith(`${base}.`));
+  if (!match) {
+    throw new Error(`媒体下载完成但未找到输出文件: ${outputBase}`);
+  }
+  return path.join(dir, match);
+}
+
+async function downloadImages(images, assetsDir, options = {}) {
+  const resolved = [];
+  await fs.mkdir(assetsDir, { recursive: true });
+
+  for (const [index, image] of images.entries()) {
+    const outputBase = path.join(
+      assetsDir,
+      `image-${String(index + 1).padStart(2, "0")}`,
+    );
+    options.onProgress?.({
+      type: "media-download-start",
+      index: index + 1,
+      total: images.length,
+      token: image.token,
+    });
+
+    try {
+      await downloadLarkMedia(
+        image.token,
+        {
+          cwd: assetsDir,
+          output: path.basename(outputBase),
+        },
+        {
+          timeout: options.timeoutMs,
+        },
+      );
+      const filePath = await findDownloadedFile(outputBase);
+      resolved.push({
+        ...image,
+        path: filePath,
+        relativePath: path.relative(path.dirname(assetsDir), filePath),
+      });
+      options.onProgress?.({
+        type: "media-download-done",
+        index: index + 1,
+        total: images.length,
+        token: image.token,
+        path: filePath,
+      });
+    } catch (error) {
+      resolved.push({
+        ...image,
+        downloadError: error.message,
+      });
+      options.onProgress?.({
+        type: "media-download-error",
+        index: index + 1,
+        total: images.length,
+        token: image.token,
+        error: error.message,
+      });
+    }
+  }
+
+  return resolved;
+}
+
+export async function prepareFeishuDoc({
+  docUrl,
+  outDir = ".xap/drafts",
+  downloadMedia = true,
+  mediaTimeoutMs = 45_000,
+  onProgress,
+} = {}) {
+  if (!docUrl) {
+    throw new Error("缺少必填参数 docUrl");
+  }
+
+  const source = await fetchLarkDoc(docUrl);
+  const normalized = normalizeLarkMarkdown(source);
+  const draftDir = path.resolve(
+    outDir,
+    `${slugify(source.title)}-${timestamp()}`,
+  );
+  const assetsDir = path.join(draftDir, "assets");
+
+  await fs.mkdir(draftDir, { recursive: true });
+
+  let downloadedImages = normalized.images;
+  if (downloadMedia && normalized.images.length > 0) {
+    downloadedImages = await downloadImages(normalized.images, assetsDir, {
+      timeoutMs: mediaTimeoutMs,
+      onProgress,
+    });
+  }
+
+  const coverImage = downloadedImages[0] ?? null;
+  const contentImages = downloadedImages.slice(1).map((image, index) => ({
+    ...image,
+    marker: `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
+  }));
+  const mediaWarnings = downloadedImages
+    .flatMap((image, index) =>
+      image.downloadError
+        ? [`第 ${index + 1} 张图片下载失败，已保留 token: ${image.token}`]
+        : [],
+    );
+
+  const draft = {
+    schemaVersion: 1,
+    source: {
+      type: "feishu-docx",
+      url: docUrl,
+      docId: source.docId,
+      identity: source.identity,
+      logId: source.logId,
+    },
+    title: normalized.title,
+    bodyHtml: normalized.bodyHtml,
+    plainText: normalized.plainText,
+    blocks: normalized.blocks,
+    coverImage,
+    contentImages,
+    warnings: [...normalized.warnings, ...mediaWarnings],
+    stats: normalized.stats,
+    generatedAt: new Date().toISOString(),
+  };
+
+  await fs.writeFile(
+    path.join(draftDir, "source.md"),
+    source.markdown,
+    "utf8",
+  );
+  await fs.writeFile(
+    path.join(draftDir, "body.html"),
+    normalized.bodyHtml,
+    "utf8",
+  );
+  await fs.writeFile(
+    path.join(draftDir, "draft.json"),
+    JSON.stringify(draft, null, 2),
+    "utf8",
+  );
+
+  return {
+    draftDir,
+    draftPath: path.join(draftDir, "draft.json"),
+    bodyHtmlPath: path.join(draftDir, "body.html"),
+    draft,
+  };
+}
