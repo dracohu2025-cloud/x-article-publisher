@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { buildDraftImages } from "../src/core/prepare-feishu-doc.mjs";
+import { buildDraftImages, downloadImages } from "../src/core/prepare-feishu-doc.mjs";
 
 test("keeps the first Feishu image in the body image queue", () => {
   const result = buildDraftImages([
@@ -19,4 +22,51 @@ test("keeps the first Feishu image in the body image queue", () => {
       { token: "second-token", marker: "[XAP-IMG-02]" },
     ],
   );
+});
+
+test("retries transient Feishu media download failures", async () => {
+  const assetsDir = await fs.mkdtemp(path.join(os.tmpdir(), "xap-media-retry-"));
+  let calls = 0;
+  const result = await downloadImages(
+    [{ token: "retry-token", blockIndex: 0 }],
+    assetsDir,
+    {
+      maxAttempts: 3,
+      retryDelayMs: 0,
+      downloadMediaFn: async (_token, target) => {
+        calls += 1;
+        if (calls < 3) throw new Error(`temporary failure ${calls}`);
+        await fs.writeFile(path.join(target.cwd, `${target.output}.png`), "image");
+      },
+    },
+  );
+
+  assert.equal(calls, 3);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].token, "retry-token");
+  assert.match(result[0].path, /image-01\.png$/);
+  assert.match(result[0].downloadWarning, /前 2 次下载失败后重试成功/);
+});
+
+test("keeps media token after retry attempts fail", async () => {
+  const assetsDir = await fs.mkdtemp(path.join(os.tmpdir(), "xap-media-fail-"));
+  let calls = 0;
+  const result = await downloadImages(
+    [{ token: "failed-token", blockIndex: 0 }],
+    assetsDir,
+    {
+      maxAttempts: 2,
+      retryDelayMs: 0,
+      downloadMediaFn: async () => {
+        calls += 1;
+        throw new Error(`permanent failure ${calls}`);
+      },
+    },
+  );
+
+  assert.equal(calls, 2);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].token, "failed-token");
+  assert.equal(result[0].path, undefined);
+  assert.match(result[0].downloadError, /permanent failure 2/);
 });

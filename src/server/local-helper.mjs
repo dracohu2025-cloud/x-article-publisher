@@ -199,10 +199,13 @@ const server = http.createServer(async (req, res) => {
         outDir: body.outDir,
         downloadMedia: body.downloadMedia !== false,
         mediaTimeoutMs: body.mediaTimeoutMs,
+        mediaMaxAttempts: body.mediaMaxAttempts,
         onProgress: async (event) => {
           if (event.type === "media-download-start") {
             console.log(
-              `[${requestId}] media ${event.index}/${event.total} start ${event.token}`,
+              `[${requestId}] media ${event.index}/${event.total} start ${event.token} attempt ${
+                event.attempt || 1
+              }/${event.maxAttempts || 1}`,
             );
             await writeStatus({
               state: "running",

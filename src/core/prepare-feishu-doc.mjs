@@ -26,8 +26,22 @@ async function findDownloadedFile(outputBase) {
   return path.join(dir, match);
 }
 
-async function downloadImages(images, assetsDir, options = {}) {
+function normalizeMaxAttempts(value) {
+  const attempts = Number(value);
+  if (!Number.isFinite(attempts)) return 3;
+  return Math.max(1, Math.floor(attempts));
+}
+
+function retryDelay(ms) {
+  if (!ms) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function downloadImages(images, assetsDir, options = {}) {
   const resolved = [];
+  const downloadMediaFn = options.downloadMediaFn || downloadLarkMedia;
+  const maxAttempts = normalizeMaxAttempts(options.maxAttempts);
+  const retryDelayMs = Number(options.retryDelayMs ?? 750);
   await fs.mkdir(assetsDir, { recursive: true });
 
   for (const [index, image] of images.entries()) {
@@ -35,45 +49,41 @@ async function downloadImages(images, assetsDir, options = {}) {
       assetsDir,
       `image-${String(index + 1).padStart(2, "0")}`,
     );
-    options.onProgress?.({
-      type: "media-download-start",
-      index: index + 1,
-      total: images.length,
-      token: image.token,
-    });
 
-    try {
-      await downloadLarkMedia(
-        image.token,
-        {
-          cwd: assetsDir,
-          output: path.basename(outputBase),
-        },
-        {
-          timeout: options.timeoutMs,
-        },
-      );
-      const filePath = await findDownloadedFile(outputBase);
-      resolved.push({
-        ...image,
-        path: filePath,
-        relativePath: path.relative(path.dirname(assetsDir), filePath),
-      });
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       options.onProgress?.({
-        type: "media-download-done",
+        type: "media-download-start",
         index: index + 1,
         total: images.length,
         token: image.token,
-        path: filePath,
+        attempt,
+        maxAttempts,
       });
-    } catch (error) {
+
       try {
+        await downloadMediaFn(
+          image.token,
+          {
+            cwd: assetsDir,
+            output: path.basename(outputBase),
+          },
+          {
+            timeout: options.timeoutMs,
+          },
+        );
         const filePath = await findDownloadedFile(outputBase);
         resolved.push({
           ...image,
           path: filePath,
           relativePath: path.relative(path.dirname(assetsDir), filePath),
-          downloadWarning: error.message,
+          ...(lastError
+            ? {
+                downloadWarning: `前 ${attempt - 1} 次下载失败后重试成功: ${
+                  lastError.message
+                }`,
+              }
+            : {}),
         });
         options.onProgress?.({
           type: "media-download-done",
@@ -82,19 +92,48 @@ async function downloadImages(images, assetsDir, options = {}) {
           token: image.token,
           path: filePath,
         });
-        continue;
-      } catch {}
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        try {
+          const filePath = await findDownloadedFile(outputBase);
+          resolved.push({
+            ...image,
+            path: filePath,
+            relativePath: path.relative(path.dirname(assetsDir), filePath),
+            downloadWarning: error.message,
+          });
+          options.onProgress?.({
+            type: "media-download-done",
+            index: index + 1,
+            total: images.length,
+            token: image.token,
+            path: filePath,
+          });
+          lastError = null;
+          break;
+        } catch {}
 
+        options.onProgress?.({
+          type: "media-download-error",
+          index: index + 1,
+          total: images.length,
+          token: image.token,
+          attempt,
+          maxAttempts,
+          error: error.message,
+        });
+        if (attempt < maxAttempts) {
+          await retryDelay(retryDelayMs * attempt);
+        }
+      }
+    }
+
+    if (lastError) {
       resolved.push({
         ...image,
-        downloadError: error.message,
-      });
-      options.onProgress?.({
-        type: "media-download-error",
-        index: index + 1,
-        total: images.length,
-        token: image.token,
-        error: error.message,
+        downloadError: lastError.message,
       });
     }
   }
@@ -117,6 +156,7 @@ export async function prepareFeishuDoc({
   outDir = ".xap/drafts",
   downloadMedia = true,
   mediaTimeoutMs = 45_000,
+  mediaMaxAttempts = 3,
   onProgress,
 } = {}) {
   if (!docUrl) {
@@ -137,6 +177,7 @@ export async function prepareFeishuDoc({
   if (downloadMedia && normalized.images.length > 0) {
     downloadedImages = await downloadImages(normalized.images, assetsDir, {
       timeoutMs: mediaTimeoutMs,
+      maxAttempts: mediaMaxAttempts,
       onProgress,
     });
   }

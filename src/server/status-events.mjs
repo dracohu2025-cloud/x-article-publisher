@@ -3,6 +3,8 @@ export function mediaProgressStatus(event) {
     phase: "media",
     current: event.index,
     total: event.total,
+    attempt: event.attempt,
+    maxAttempts: event.maxAttempts,
   };
 
   if (event.type === "media-download-start") {

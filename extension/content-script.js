@@ -1,6 +1,8 @@
 const helperBase = "http://127.0.0.1:49231";
 const XAP_CONTENT_VERSION = "context-safe-storage-v2";
 const X_ARTICLE_MAX_IMAGES = 26;
+const FEISHU_MEDIA_TIMEOUT_MS = 15_000;
+const FEISHU_MEDIA_MAX_ATTEMPTS = 3;
 
 const state = {
   draft: null,
@@ -550,7 +552,11 @@ async function loadDraftFromHelper(draftPath) {
 function formatHelperProgress(status) {
   const progress =
     status.total && status.current != null ? ` ${status.current}/${status.total}` : "";
-  return `${status.message || "helper 正在处理草稿..."}${progress}`;
+  const attempt =
+    status.maxAttempts > 1 && status.attempt
+      ? `，第 ${status.attempt}/${status.maxAttempts} 次`
+      : "";
+  return `${status.message || "helper 正在处理草稿..."}${progress}${attempt}`;
 }
 
 async function refreshDraft() {
@@ -654,7 +660,11 @@ async function prepareDraft() {
       const res = await fetch(`${helperBase}/prepare`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ docUrl, mediaTimeoutMs: 60000 }),
+        body: JSON.stringify({
+          docUrl,
+          mediaTimeoutMs: FEISHU_MEDIA_TIMEOUT_MS,
+          mediaMaxAttempts: FEISHU_MEDIA_MAX_ATTEMPTS,
+        }),
       });
       const payload = await res.json();
       if (!payload.ok) throw new Error(payload.error || "生成失败");

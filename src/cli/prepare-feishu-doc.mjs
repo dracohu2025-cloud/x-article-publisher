@@ -7,6 +7,7 @@ function parseArgs(argv) {
     outDir: ".xap/drafts",
     downloadMedia: true,
     mediaTimeoutMs: 45_000,
+    mediaMaxAttempts: 3,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -19,6 +20,8 @@ function parseArgs(argv) {
       args.downloadMedia = false;
     } else if (arg === "--media-timeout-ms") {
       args.mediaTimeoutMs = Number(argv[++index]);
+    } else if (arg === "--media-max-attempts") {
+      args.mediaMaxAttempts = Number(argv[++index]);
     } else if (arg === "--help" || arg === "-h") {
       args.help = true;
     } else {
@@ -38,6 +41,7 @@ Options:
   --out          草稿输出目录，默认 .xap/drafts
   --skip-media   只转换文本，不下载图片
   --media-timeout-ms  单张图片下载超时，默认 45000
+  --media-max-attempts 单张图片最多尝试次数，默认 3
 `);
 }
 
@@ -52,7 +56,11 @@ try {
     ...args,
     onProgress(event) {
       if (event.type === "media-download-start") {
-        console.error(`下载图片 ${event.index}/${event.total}: ${event.token}`);
+        console.error(
+          `下载图片 ${event.index}/${event.total} 第 ${event.attempt || 1}/${
+            event.maxAttempts || 1
+          } 次: ${event.token}`,
+        );
       }
       if (event.type === "media-download-error") {
         console.error(`图片 ${event.index}/${event.total} 下载失败: ${event.error}`);

@@ -8,11 +8,15 @@ test("keeps media progress count out of status message", () => {
     index: 1,
     total: 24,
     token: "token-1",
+    attempt: 2,
+    maxAttempts: 3,
   });
 
   assert.equal(status.message, "正在下载图片");
   assert.equal(status.current, 1);
   assert.equal(status.total, 24);
+  assert.equal(status.attempt, 2);
+  assert.equal(status.maxAttempts, 3);
 });
 
 test("keeps media completion count out of status message", () => {
