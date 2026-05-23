@@ -195,14 +195,13 @@ export function blocksToPlainText(blocks) {
 
 export function normalizeLarkMarkdown({ title, markdown }) {
   const parsed = parseLarkMarkdown(markdown);
-  const [cover, ...contentImages] = parsed.images;
 
   return {
     title,
     bodyHtml: blocksToHtml(parsed.blocks),
     plainText: blocksToPlainText(parsed.blocks),
-    coverImage: cover ?? null,
-    contentImages,
+    coverImage: null,
+    contentImages: parsed.images,
     images: parsed.images,
     blocks: parsed.blocks,
     warnings: parsed.warnings,

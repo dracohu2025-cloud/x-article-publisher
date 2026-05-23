@@ -1,7 +1,6 @@
 const helperBase = "http://127.0.0.1:49231";
-const XAP_CONTENT_VERSION = "draft-block-write-v1";
+const XAP_CONTENT_VERSION = "state-managed-panel-v1";
 const X_ARTICLE_MAX_IMAGES = 26;
-const XAP_SAFE_CONTENT_IMAGE_LIMIT = 10;
 
 const state = {
   draft: null,
@@ -26,21 +25,27 @@ function setStatus(message) {
 }
 
 function uploadableContentImages(draft) {
-  return draft?.contentImages?.filter((image) => image.path) || [];
+  const images = draft?.coverImage
+    ? [draft.coverImage, ...(draft?.contentImages || [])]
+    : draft?.contentImages || [];
+  return images
+    .filter((image) => image.path)
+    .map((image, index) => ({
+      ...image,
+      marker: `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
+    }));
 }
 
 function imageLimitInfo(draft) {
   const uploadableImages = uploadableContentImages(draft);
-  const coverSlots = draft?.coverImage ? 1 : 0;
-  const xContentLimit = Math.max(0, X_ARTICLE_MAX_IMAGES - coverSlots);
-  const maxContentImages = Math.min(xContentLimit, XAP_SAFE_CONTENT_IMAGE_LIMIT);
+  const coverSlots = 0;
+  const maxContentImages = Math.max(0, X_ARTICLE_MAX_IMAGES - coverSlots);
   const selectedImages = uploadableImages.slice(0, maxContentImages);
   const skippedImages = uploadableImages.slice(maxContentImages);
 
   return {
     coverSlots,
     maxArticleImages: X_ARTICLE_MAX_IMAGES,
-    safeContentImageLimit: XAP_SAFE_CONTENT_IMAGE_LIMIT,
     maxContentImages,
     totalContentImages: uploadableImages.length,
     selectedImages,
@@ -70,16 +75,16 @@ function draftHintText(draft) {
 
   const limit = imageLimitInfo(draft);
   if (limit.skippedCount > 0) {
-    return `按实测稳定上限处理：正文只导入前 ${limit.maxContentImages} 张；图片多的文章建议拆篇。`;
+    return `受 X Articles 总图数 ${limit.maxArticleImages} 张限制，超出部分会跳过；图片多的文章建议拆篇。`;
   }
-  return "主流程：先手动上传封面，再点击自动导入。请检查结果后再发布。";
+  return "主流程：点击自动导入正文和图片，检查结果后再发布。";
 }
 
 function draftGeneratedStatus(draft) {
   const limit = imageLimitInfo(draft);
-  const base = `草稿已生成：${draft.stats.blockCount} 个文本块，${draft.contentImages.length} 张正文图。`;
+  const base = `草稿已生成：${draft.stats.blockCount} 个文本块，${limit.totalContentImages} 张正文图。`;
   if (limit.skippedCount === 0) return base;
-  return `${base}按实测稳定上限，正文将导入 ${limit.selectedCount} 张，跳过后 ${limit.skippedCount} 张。`;
+  return `${base}受 X Articles 总图数 ${limit.maxArticleImages} 张限制，正文将导入 ${limit.selectedCount} 张，跳过 ${limit.skippedCount} 张。`;
 }
 
 function imageLimitStatusSuffix(draft) {
@@ -142,6 +147,10 @@ function injectStyles() {
       display: none;
     }
 
+    #xap-panel [hidden] {
+      display: none !important;
+    }
+
     .xap-header {
       display: flex;
       align-items: center;
@@ -180,6 +189,11 @@ function injectStyles() {
       font: inherit;
     }
 
+    #xap-doc-url:disabled {
+      opacity: 0.72;
+      cursor: not-allowed;
+    }
+
     .xap-title,
     .xap-hint,
     .xap-status {
@@ -190,6 +204,11 @@ function injectStyles() {
     .xap-title {
       font-weight: 700;
       white-space: nowrap;
+    }
+
+    .xap-summary {
+      display: grid;
+      gap: 4px;
     }
 
     .xap-counter {
@@ -275,20 +294,23 @@ function createPanel() {
       <button type="button" data-action="toggle">收起</button>
     </div>
     <div class="xap-body">
-      <div class="xap-field">
+      <div class="xap-field" data-section="input">
         <label for="xap-doc-url">飞书文档链接</label>
         <textarea id="xap-doc-url" rows="3" placeholder="https://*.feishu.cn/docx/..."></textarea>
       </div>
-      <div class="xap-actions">
+      <div class="xap-actions" data-section="prepare-actions">
         <button type="button" class="xap-primary" data-action="prepare">生成草稿</button>
-        <button type="button" data-action="copy-title">复制标题</button>
       </div>
-      <div class="xap-title" data-role="title">未加载草稿</div>
-      <div class="xap-counter" data-role="counter">0/0</div>
-      <div class="xap-hint" data-role="hint"></div>
-      <div class="xap-actions">
+      <div class="xap-summary" data-section="summary">
+        <div class="xap-title" data-role="title">未加载草稿</div>
+        <div class="xap-counter" data-role="counter">0/0</div>
+      </div>
+      <div class="xap-hint" data-role="hint" data-section="hint"></div>
+      <div class="xap-actions" data-section="draft-actions">
+        <button type="button" data-action="copy-title">复制标题</button>
         <button type="button" class="xap-primary" data-action="import">自动导入正文+图片</button>
         <button type="button" data-action="reload">刷新草稿</button>
+        <button type="button" data-action="clear-draft">清空草稿</button>
       </div>
       <div class="xap-status" data-role="status"></div>
     </div>
@@ -306,7 +328,15 @@ function createPanel() {
   els.status = panel.querySelector('[data-role="status"]');
   els.import = panel.querySelector('[data-action="import"]');
   els.reload = panel.querySelector('[data-action="reload"]');
+  els.clearDraft = panel.querySelector('[data-action="clear-draft"]');
   els.toggle = panel.querySelector('[data-action="toggle"]');
+  els.sections = {
+    input: panel.querySelector('[data-section="input"]'),
+    prepareActions: panel.querySelector('[data-section="prepare-actions"]'),
+    summary: panel.querySelector('[data-section="summary"]'),
+    hint: panel.querySelector('[data-section="hint"]'),
+    draftActions: panel.querySelector('[data-section="draft-actions"]'),
+  };
 
   panel.addEventListener("click", async (event) => {
     const action = event.target?.dataset?.action;
@@ -334,27 +364,57 @@ function createPanel() {
       return;
     }
 
+    if (action === "clear-draft") {
+      await clearDraft();
+      return;
+    }
+
     if (action === "import") {
       await importBodyAndImages();
     }
   });
 }
 
+function setVisible(element, visible) {
+  if (element) {
+    element.hidden = !visible;
+  }
+}
+
+function setButtonView(button, buttonView) {
+  if (!button || !buttonView) return;
+  setVisible(button, buttonView.visible);
+  button.disabled = !buttonView.enabled;
+}
+
 function render() {
   createPanel();
+
+  const view = globalThis.XAPPanelState.buildPanelView(state);
 
   els.title.textContent = state.draft?.title || "未加载草稿";
   els.counter.textContent = draftCounterText(state.draft);
   els.hint.textContent = draftHintText(state.draft);
-  const limit = imageLimitInfo(state.draft);
-  els.import.textContent =
-    state.draft && limit.skippedCount > 0
-      ? `导入正文+前 ${limit.selectedCount} 图`
-      : "自动导入正文+图片";
-  els.prepare.disabled = state.preparing || state.importing;
-  els.copyTitle.disabled = !state.draft || state.preparing || state.importing;
-  els.reload.disabled = state.preparing || state.importing;
-  els.import.disabled = !state.draft || state.preparing || state.importing;
+  els.import.textContent = state.importing ? "导入中" : "自动导入正文+图片";
+  els.docUrl.disabled = state.preparing || state.importing;
+
+  if (state.importing) {
+    els.import.dataset.busy = "true";
+  } else {
+    delete els.import.dataset.busy;
+  }
+
+  setVisible(els.sections.input, view.sections.input);
+  setVisible(els.sections.prepareActions, view.sections.prepareActions);
+  setVisible(els.sections.summary, view.sections.summary);
+  setVisible(els.sections.hint, view.sections.hint);
+  setVisible(els.sections.draftActions, view.sections.draftActions);
+
+  setButtonView(els.prepare, view.buttons.prepare);
+  setButtonView(els.copyTitle, view.buttons.copyTitle);
+  setButtonView(els.import, view.buttons.import);
+  setButtonView(els.reload, view.buttons.reload);
+  setButtonView(els.clearDraft, view.buttons.clearDraft);
 
   if (state.images.length > 0 && !els.status.textContent) {
     setStatus("准备就绪。点击“自动导入正文+图片”开始。");
@@ -368,9 +428,58 @@ function applyDraftPayload(payload) {
   render();
 }
 
+function isExtensionContextInvalidated(error) {
+  return globalThis.XAPExtensionContext.isExtensionContextInvalidated(error);
+}
+
+function extensionReloadMessage() {
+  return globalThis.XAPExtensionContext.extensionReloadMessage();
+}
+
+async function readLocalStorage(keys) {
+  try {
+    return await chrome.storage.local.get(keys);
+  } catch (error) {
+    if (isExtensionContextInvalidated(error)) {
+      setStatus(extensionReloadMessage());
+      return { extensionContextInvalidated: true };
+    }
+    throw error;
+  }
+}
+
+async function writeLocalStorage(values) {
+  try {
+    await chrome.storage.local.set(values);
+    return true;
+  } catch (error) {
+    if (isExtensionContextInvalidated(error)) {
+      setStatus(extensionReloadMessage());
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function removeLocalStorage(keys) {
+  try {
+    await chrome.storage.local.remove(keys);
+    return true;
+  } catch (error) {
+    if (isExtensionContextInvalidated(error)) {
+      setStatus(extensionReloadMessage());
+      return false;
+    }
+    throw error;
+  }
+}
+
 async function loadStoredDraft() {
   createPanel();
-  const result = await chrome.storage.local.get(["latestDraft", "latestDocUrl"]);
+  const result = await readLocalStorage(["latestDraft", "latestDocUrl"]);
+  if (result.extensionContextInvalidated) {
+    return false;
+  }
   if (result.latestDocUrl && els.docUrl && !els.docUrl.value.trim()) {
     els.docUrl.value = result.latestDocUrl;
   }
@@ -393,9 +502,10 @@ async function loadDraftFromHelper(draftPath) {
     throw new Error(payload.error || "读取草稿失败");
   }
 
-  await chrome.storage.local.set({ latestDraft: payload });
   applyDraftPayload(payload);
-  setStatus(`已载入最近草稿：${payload.draft.title}${imageLimitStatusSuffix(payload.draft)}`);
+  const stored = await writeLocalStorage({ latestDraft: payload });
+  const status = `已载入最近草稿：${payload.draft.title}${imageLimitStatusSuffix(payload.draft)}`;
+  setStatus(stored ? status : `${status}。${extensionReloadMessage()}`);
   return payload;
 }
 
@@ -433,6 +543,23 @@ async function refreshDraft() {
     await loadStoredDraft();
     setStatus(`无法连接 helper：${error.message}`);
   }
+}
+
+async function clearDraft() {
+  if (state.preparing || state.importing) return;
+
+  stopStatusPolling();
+  const removed = await removeLocalStorage(["latestDraft", "latestDocUrl"]);
+  try {
+    await fetch(`${helperBase}/clear`, { method: "POST" });
+  } catch {}
+
+  state.draft = null;
+  state.draftPath = null;
+  state.images = [];
+  if (els.docUrl) els.docUrl.value = "";
+  render();
+  setStatus(removed ? "" : extensionReloadMessage());
 }
 
 function stopStatusPolling() {
@@ -489,17 +616,23 @@ async function prepareDraft() {
       const res = await fetch(`${helperBase}/prepare`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ docUrl, mediaTimeoutMs: 15000 }),
+        body: JSON.stringify({ docUrl, mediaTimeoutMs: 60000 }),
       });
       const payload = await res.json();
       if (!payload.ok) throw new Error(payload.error || "生成失败");
 
-      await chrome.storage.local.set({ latestDraft: payload, latestDocUrl: docUrl });
       applyDraftPayload(payload);
+      const stored = await writeLocalStorage({ latestDraft: payload, latestDocUrl: docUrl });
       setStatus(draftGeneratedStatus(payload.draft));
+      if (!stored) {
+        setStatus(`${draftGeneratedStatus(payload.draft)} ${extensionReloadMessage()}`);
+      }
       await markButtonDone(els.prepare, "已生成");
     } catch (error) {
-      setStatus(`生成失败：${error.message}`);
+      const message = isExtensionContextInvalidated(error)
+        ? extensionReloadMessage()
+        : `生成失败：${error.message}`;
+      setStatus(message);
     } finally {
       stopStatusPolling();
       state.preparing = false;
@@ -634,13 +767,30 @@ async function prepareImportPayload() {
       imageLimit: {
         maxArticleImages: limit.maxArticleImages,
         coverSlots: limit.coverSlots,
-        safeContentImageLimit: limit.safeContentImageLimit,
         maxContentImages: limit.maxContentImages,
         totalContentImages: limit.totalContentImages,
         skippedCount: limit.skippedCount,
       },
     },
   };
+}
+
+async function markDraftImported(summary) {
+  if (!state.draftPath) return false;
+
+  const res = await fetch(`${helperBase}/imported`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      draftPath: state.draftPath,
+      summary,
+    }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok || !payload.ok) {
+    throw new Error(payload.error || "标记已导入失败");
+  }
+  return true;
 }
 
 function runMainImport(payload, fileMap) {
@@ -725,10 +875,19 @@ async function importBodyAndImages() {
     const failText =
       summary.imgFail > 0 ? `，失败 ${summary.imgFail} 张，先不要发布` : "";
     const resultPrefix = summary.imgFail > 0 ? "自动导入未完整完成" : "自动导入完成";
+    let localCleanupText = "";
+    if ((summary.imgFail || 0) === 0 && (payload.imageLimit?.skippedCount || 0) === 0) {
+      try {
+        const marked = await markDraftImported(summary);
+        localCleanupText = marked ? "；本地图片将在 24 小时后自动清理" : "";
+      } catch (error) {
+        localCleanupText = `；本地清理标记失败：${error.message}`;
+      }
+    }
     setStatus(
       `${resultPrefix}：上传 ${summary.imgOk || 0}/${payload.images.length} 张图，重排 ${
         summary.relocatedImages || 0
-      }/${summary.imgOk || 0}，${cleanupText}${skipText}${failText}。请检查后再发布。`,
+      }/${summary.imgOk || 0}，${cleanupText}${skipText}${failText}${localCleanupText}。请检查后再发布。`,
     );
   } catch (error) {
     setStatus(`自动导入失败：${error.message}`);

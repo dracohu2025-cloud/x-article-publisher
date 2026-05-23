@@ -4,10 +4,16 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { prepareFeishuDoc } from "../core/prepare-feishu-doc.mjs";
+import { cleanupImportedDraftAssets, markDraftImported } from "./draft-cleanup.mjs";
+import { mediaProgressStatus } from "./status-events.mjs";
 
 const port = Number(process.env.XAP_HELPER_PORT || 49231);
 const draftsRoot = path.resolve(process.cwd(), ".xap/drafts");
 const statusPath = path.resolve(process.cwd(), ".xap/status.json");
+const cleanupIntervalMs =
+  Number(process.env.XAP_CLEANUP_INTERVAL_HOURS || 24) * 60 * 60 * 1000;
+const importedAssetRetentionMs =
+  Number(process.env.XAP_IMPORTED_ASSET_RETENTION_HOURS || 24) * 60 * 60 * 1000;
 let requestSeq = 0;
 
 async function writeStatus(status) {
@@ -94,6 +100,28 @@ async function readJson(req) {
   return body ? JSON.parse(body) : {};
 }
 
+async function runImportedDraftCleanup() {
+  const result = await cleanupImportedDraftAssets({
+    draftsRoot,
+    retentionMs: importedAssetRetentionMs,
+  });
+  if (result.cleanedDrafts.length > 0) {
+    console.log(`cleaned imported draft assets: ${result.cleanedDrafts.length}`);
+  }
+  return result;
+}
+
+function scheduleImportedDraftCleanup() {
+  if (cleanupIntervalMs <= 0 || importedAssetRetentionMs <= 0) return;
+
+  const timer = setInterval(() => {
+    runImportedDraftCleanup().catch((error) => {
+      console.error(`cleanup failed: ${error.message}`);
+    });
+  }, cleanupIntervalMs);
+  timer.unref?.();
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
 
@@ -134,6 +162,27 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/clear") {
+      await writeStatus({
+        state: "idle",
+        phase: "idle",
+        message: "最近草稿状态已清空",
+      });
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/imported") {
+      const body = await readJson(req);
+      const metadata = await markDraftImported({
+        draftsRoot,
+        draftPath: body.draftPath,
+        summary: body.summary || {},
+      });
+      sendJson(res, 200, { ok: true, metadata });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/prepare") {
       const requestId = String(++requestSeq).padStart(3, "0");
       console.log(`[${requestId}] prepare start`);
@@ -159,10 +208,7 @@ const server = http.createServer(async (req, res) => {
               state: "running",
               requestId,
               docUrl: body.docUrl,
-              phase: "media",
-              current: event.index,
-              total: event.total,
-              message: `正在下载图片 ${event.index}/${event.total}`,
+              ...mediaProgressStatus(event),
             });
           }
           if (event.type === "media-download-done") {
@@ -173,11 +219,7 @@ const server = http.createServer(async (req, res) => {
               state: "running",
               requestId,
               docUrl: body.docUrl,
-              phase: "media",
-              current: event.index,
-              total: event.total,
-              lastPath: event.path,
-              message: `已下载图片 ${event.index}/${event.total}`,
+              ...mediaProgressStatus(event),
             });
           }
           if (event.type === "media-download-error") {
@@ -188,11 +230,7 @@ const server = http.createServer(async (req, res) => {
               state: "running",
               requestId,
               docUrl: body.docUrl,
-              phase: "media",
-              current: event.index,
-              total: event.total,
-              error: event.error,
-              message: `图片 ${event.index}/${event.total} 下载失败，继续处理`,
+              ...mediaProgressStatus(event),
             });
           }
         },
@@ -235,4 +273,5 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`xap-helper listening on http://127.0.0.1:${port}`);
+  scheduleImportedDraftCleanup();
 });

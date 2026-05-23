@@ -13,7 +13,8 @@ export async function runLarkCli(args, options = {}) {
     return stdout;
   } catch (error) {
     const stderr = error.stderr ? `\n${error.stderr}` : "";
-    throw new Error(`lark-cli 执行失败: lark-cli ${args.join(" ")}${stderr}`);
+    const reason = error.message ? `\n${error.message}` : "";
+    throw new Error(`lark-cli 执行失败: lark-cli ${args.join(" ")}${reason}${stderr}`);
   }
 }
 

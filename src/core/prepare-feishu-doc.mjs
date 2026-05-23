@@ -67,6 +67,24 @@ async function downloadImages(images, assetsDir, options = {}) {
         path: filePath,
       });
     } catch (error) {
+      try {
+        const filePath = await findDownloadedFile(outputBase);
+        resolved.push({
+          ...image,
+          path: filePath,
+          relativePath: path.relative(path.dirname(assetsDir), filePath),
+          downloadWarning: error.message,
+        });
+        options.onProgress?.({
+          type: "media-download-done",
+          index: index + 1,
+          total: images.length,
+          token: image.token,
+          path: filePath,
+        });
+        continue;
+      } catch {}
+
       resolved.push({
         ...image,
         downloadError: error.message,
@@ -82,6 +100,16 @@ async function downloadImages(images, assetsDir, options = {}) {
   }
 
   return resolved;
+}
+
+export function buildDraftImages(images) {
+  return {
+    coverImage: null,
+    contentImages: images.map((image, index) => ({
+      ...image,
+      marker: `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
+    })),
+  };
 }
 
 export async function prepareFeishuDoc({
@@ -113,11 +141,7 @@ export async function prepareFeishuDoc({
     });
   }
 
-  const coverImage = downloadedImages[0] ?? null;
-  const contentImages = downloadedImages.slice(1).map((image, index) => ({
-    ...image,
-    marker: `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
-  }));
+  const { coverImage, contentImages } = buildDraftImages(downloadedImages);
   const mediaWarnings = downloadedImages
     .flatMap((image, index) =>
       image.downloadError

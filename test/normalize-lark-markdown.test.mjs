@@ -19,9 +19,10 @@ test("normalizes Feishu markdown into X Article draft shape", () => {
   });
 
   assert.equal(draft.title, "测试标题");
-  assert.equal(draft.coverImage.token, "cover-token");
-  assert.equal(draft.contentImages[0].token, "body-token");
-  assert.equal(draft.contentImages[0].blockIndex, 1);
+  assert.equal(draft.coverImage, null);
+  assert.equal(draft.contentImages[0].token, "cover-token");
+  assert.equal(draft.contentImages[1].token, "body-token");
+  assert.equal(draft.contentImages[1].blockIndex, 1);
   assert.match(draft.bodyHtml, /<ul><li>第一项<\/li><li>第二项<\/li><\/ul>/);
   assert.match(draft.bodyHtml, /<blockquote><p>注意：这是引用<\/p><\/blockquote>/);
   assert.match(draft.bodyHtml, /<a href="https:\/\/example.com\/">/);
