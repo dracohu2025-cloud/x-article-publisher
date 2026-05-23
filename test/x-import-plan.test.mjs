@@ -66,6 +66,48 @@ test("limits content images and omits skipped markers", () => {
   assert.equal(plan.totalContentImages, 3);
 });
 
+test("skips unavailable image markers and preserves original marker numbers", () => {
+  const planner = loadPlanner();
+  const plan = planner.buildXImportPlan({
+    blocks: [
+      { type: "heading", level: 3, text: "第一张" },
+      { type: "heading", level: 3, text: "第二张" },
+      { type: "heading", level: 3, text: "第三张" },
+    ],
+    contentImages: [
+      { marker: "[XAP-IMG-01]", blockIndex: 0, token: "missing-token" },
+      { marker: "[XAP-IMG-02]", blockIndex: 1, path: "/tmp/image-02.png" },
+      { marker: "[XAP-IMG-03]", blockIndex: 2, path: "/tmp/image-03.png" },
+    ],
+  });
+
+  const markerBlocks = plan.blocks
+    .map((block) => block.text)
+    .filter((text) => String(text || "").startsWith("[XAP-IMG-"));
+
+  assert.deepEqual(markerBlocks, ["[XAP-IMG-02]", "[XAP-IMG-03]"]);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(plan.images)),
+    [
+      {
+        marker: "[XAP-IMG-02]",
+        path: "/tmp/image-02.png",
+        blockIndex: 1,
+      },
+      {
+        marker: "[XAP-IMG-03]",
+        path: "/tmp/image-03.png",
+        blockIndex: 2,
+      },
+    ],
+  );
+  assert.equal(plan.skippedImages.length, 1);
+  assert.equal(plan.unavailableImages.length, 1);
+  assert.equal(plan.limitSkippedImages.length, 0);
+  assert.equal(plan.totalContentImages, 3);
+  assert.equal(plan.importableContentImages, 2);
+});
+
 test("builds structured Draft.js blocks with markers after source blocks", () => {
   const planner = loadPlanner();
   const plan = planner.buildXImportPlan({

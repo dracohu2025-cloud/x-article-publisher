@@ -29,25 +29,39 @@ function uploadableContentImages(draft) {
     ? [draft.coverImage, ...(draft?.contentImages || [])]
     : draft?.contentImages || [];
   return images
-    .filter((image) => image.path)
     .map((image, index) => ({
       ...image,
-      marker: `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
-    }));
+      marker: image?.marker || `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
+    }))
+    .filter((image) => image.path);
 }
 
 function imageLimitInfo(draft) {
+  const allImages = (draft?.coverImage
+    ? [draft.coverImage, ...(draft?.contentImages || [])]
+    : draft?.contentImages || []
+  ).map((image, index) => ({
+    ...image,
+    marker: image?.marker || `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
+  }));
   const uploadableImages = uploadableContentImages(draft);
+  const unavailableImages = allImages.filter((image) => !image.path);
   const coverSlots = 0;
   const maxContentImages = Math.max(0, X_ARTICLE_MAX_IMAGES - coverSlots);
   const selectedImages = uploadableImages.slice(0, maxContentImages);
-  const skippedImages = uploadableImages.slice(maxContentImages);
+  const limitSkippedImages = uploadableImages.slice(maxContentImages);
+  const skippedImages = [...unavailableImages, ...limitSkippedImages];
 
   return {
     coverSlots,
     maxArticleImages: X_ARTICLE_MAX_IMAGES,
     maxContentImages,
-    totalContentImages: uploadableImages.length,
+    totalContentImages: allImages.length,
+    uploadableCount: uploadableImages.length,
+    unavailableImages,
+    unavailableCount: unavailableImages.length,
+    limitSkippedImages,
+    limitSkippedCount: limitSkippedImages.length,
     selectedImages,
     skippedImages,
     selectedCount: selectedImages.length,
@@ -61,11 +75,15 @@ function draftCounterText(draft) {
   const limit = imageLimitInfo(draft);
   const imageCount = draft?.stats?.imageCount ?? limit.totalContentImages;
   const blockCount = draft?.stats?.blockCount ?? 0;
+  const unavailableSuffix =
+    limit.unavailableCount > 0 ? `，下载失败 ${limit.unavailableCount} 张` : "";
+  const limitSuffix =
+    limit.limitSkippedCount > 0 ? `，超限跳过 ${limit.limitSkippedCount} 张` : "";
   const suffix =
     limit.skippedCount > 0
-      ? `，将导入 ${limit.selectedCount} 张，跳过 ${limit.skippedCount} 张`
+      ? `，将导入 ${limit.selectedCount} 张${unavailableSuffix}${limitSuffix}`
       : "";
-  return `${blockCount} 个文本块，${imageCount} 张图片，正文图 ${limit.totalContentImages} 张${suffix}`;
+  return `${blockCount} 个文本块，${imageCount} 张图片，正文图 ${limit.selectedCount}/${limit.totalContentImages} 张${suffix}`;
 }
 
 function draftHintText(draft) {
@@ -74,7 +92,10 @@ function draftHintText(draft) {
   }
 
   const limit = imageLimitInfo(draft);
-  if (limit.skippedCount > 0) {
+  if (limit.unavailableCount > 0) {
+    return `有 ${limit.unavailableCount} 张图片没有下载成功，自动导入会跳过这些图片；可重新生成草稿或手动补图。`;
+  }
+  if (limit.limitSkippedCount > 0) {
     return `受 X Articles 总图数 ${limit.maxArticleImages} 张限制，超出部分会跳过；图片多的文章建议拆篇。`;
   }
   return "主流程：点击自动导入正文和图片，检查结果后再发布。";
@@ -82,15 +103,26 @@ function draftHintText(draft) {
 
 function draftGeneratedStatus(draft) {
   const limit = imageLimitInfo(draft);
-  const base = `草稿已生成：${draft.stats.blockCount} 个文本块，${limit.totalContentImages} 张正文图。`;
+  const base = `草稿已生成：${draft.stats.blockCount} 个文本块，${limit.totalContentImages} 张正文图，可导入 ${limit.selectedCount} 张。`;
   if (limit.skippedCount === 0) return base;
-  return `${base}受 X Articles 总图数 ${limit.maxArticleImages} 张限制，正文将导入 ${limit.selectedCount} 张，跳过 ${limit.skippedCount} 张。`;
+  const unavailableText =
+    limit.unavailableCount > 0 ? `下载失败 ${limit.unavailableCount} 张` : "";
+  const limitText =
+    limit.limitSkippedCount > 0 ? `超限跳过 ${limit.limitSkippedCount} 张` : "";
+  return `${base}${[unavailableText, limitText].filter(Boolean).join("，")}。`;
 }
 
 function imageLimitStatusSuffix(draft) {
   const limit = imageLimitInfo(draft);
   if (limit.skippedCount === 0) return "";
-  return `；正文将导入 ${limit.selectedCount} 张，跳过后 ${limit.skippedCount} 张`;
+  const unavailableText =
+    limit.unavailableCount > 0 ? `下载失败 ${limit.unavailableCount} 张` : "";
+  const limitText =
+    limit.limitSkippedCount > 0 ? `超限跳过 ${limit.limitSkippedCount} 张` : "";
+  return `；正文将导入 ${limit.selectedCount}/${limit.totalContentImages} 张，${[
+    unavailableText,
+    limitText,
+  ].filter(Boolean).join("，")}`;
 }
 
 function nextPaint() {
@@ -775,6 +807,9 @@ async function prepareImportPayload() {
         coverSlots: limit.coverSlots,
         maxContentImages: limit.maxContentImages,
         totalContentImages: limit.totalContentImages,
+        uploadableCount: limit.uploadableCount,
+        unavailableCount: limit.unavailableCount,
+        limitSkippedCount: limit.limitSkippedCount,
         skippedCount: limit.skippedCount,
       },
     },
@@ -869,10 +904,14 @@ async function importBodyAndImages() {
 
   try {
     const { payload, fileMap } = await prepareImportPayload();
-    const skipText =
-      payload.imageLimit?.skippedCount > 0
-        ? `，因上限跳过后 ${payload.imageLimit.skippedCount} 张`
-        : "";
+    const skippedParts = [];
+    if (payload.imageLimit?.unavailableCount > 0) {
+      skippedParts.push(`下载失败跳过 ${payload.imageLimit.unavailableCount} 张`);
+    }
+    if (payload.imageLimit?.limitSkippedCount > 0) {
+      skippedParts.push(`超限跳过 ${payload.imageLimit.limitSkippedCount} 张`);
+    }
+    const skipText = skippedParts.length ? `，${skippedParts.join("，")}` : "";
     setStatus(`图片准备完成，正在导入正文和 ${payload.images.length} 张正文图${skipText}...`);
     const summary = await runMainImport(payload, fileMap);
     const cleanupText = summary.markerCleanupSkipped
@@ -880,7 +919,10 @@ async function importBodyAndImages() {
       : "marker 已处理";
     const failText =
       summary.imgFail > 0 ? `，失败 ${summary.imgFail} 张，先不要发布` : "";
-    const resultPrefix = summary.imgFail > 0 ? "自动导入未完整完成" : "自动导入完成";
+    const resultPrefix =
+      summary.imgFail > 0 || (payload.imageLimit?.skippedCount || 0) > 0
+        ? "自动导入未完整完成"
+        : "自动导入完成";
     let localCleanupText = "";
     if ((summary.imgFail || 0) === 0 && (payload.imageLimit?.skippedCount || 0) === 0) {
       try {

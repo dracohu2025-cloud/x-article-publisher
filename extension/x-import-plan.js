@@ -16,17 +16,19 @@
       items.push(marker);
       markersByBlock.set(blockIndex, items);
 
-      if (image?.path) {
-        images.push({
-          marker,
-          path: image.path,
-          token: image.token,
-          blockIndex,
-        });
-      }
+      images.push({
+        marker,
+        path: image.path,
+        token: image.token,
+        blockIndex,
+      });
     });
 
     return { markersByBlock, images };
+  }
+
+  function hasImportableImageFile(image) {
+    return Boolean(image?.path);
   }
 
   function mapDraftBlockType(block) {
@@ -329,16 +331,22 @@
     const sourceImages = Array.isArray(options.contentImages)
       ? options.contentImages
       : draft?.contentImages || [];
+    const importableImages = sourceImages.filter(hasImportableImageFile);
+    const unavailableImages = sourceImages.filter((image) => !hasImportableImageFile(image));
     const maxContentImages = normalizeMaxContentImages(
       options.maxContentImages,
-      sourceImages.length,
+      importableImages.length,
     );
+    const limitSkippedImages = importableImages.slice(maxContentImages);
 
     return {
-      selectedImages: sourceImages.slice(0, maxContentImages),
-      skippedImages: sourceImages.slice(maxContentImages),
+      selectedImages: importableImages.slice(0, maxContentImages),
+      skippedImages: [...unavailableImages, ...limitSkippedImages],
+      unavailableImages,
+      limitSkippedImages,
       maxContentImages,
       totalContentImages: sourceImages.length,
+      importableContentImages: importableImages.length,
     };
   }
 
@@ -394,8 +402,15 @@
   }
 
   function buildXImportPlan(draft, options = {}) {
-    const { selectedImages, skippedImages, maxContentImages, totalContentImages } =
-      contentImagesForPlan(draft, options);
+    const {
+      selectedImages,
+      skippedImages,
+      unavailableImages,
+      limitSkippedImages,
+      maxContentImages,
+      totalContentImages,
+      importableContentImages,
+    } = contentImagesForPlan(draft, options);
     const { images } = groupMarkersByBlock(selectedImages);
     return {
       html: bodyHtmlWithMarkers(draft, options),
@@ -404,8 +419,11 @@
       markerPrefix: MARKER_PREFIX,
       images,
       skippedImages,
+      unavailableImages,
+      limitSkippedImages,
       maxContentImages,
       totalContentImages,
+      importableContentImages,
     };
   }
 
