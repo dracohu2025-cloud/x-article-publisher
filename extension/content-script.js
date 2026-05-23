@@ -1,5 +1,5 @@
 const helperBase = "http://127.0.0.1:49231";
-const XAP_CONTENT_VERSION = "state-managed-panel-v1";
+const XAP_CONTENT_VERSION = "context-safe-storage-v2";
 const X_ARTICLE_MAX_IMAGES = 26;
 
 const state = {
@@ -429,11 +429,17 @@ function applyDraftPayload(payload) {
 }
 
 function isExtensionContextInvalidated(error) {
-  return globalThis.XAPExtensionContext.isExtensionContextInvalidated(error);
+  return (
+    globalThis.XAPExtensionContext?.isExtensionContextInvalidated?.(error) ||
+    /Extension context invalidated/i.test(String(error?.message || error || ""))
+  );
 }
 
 function extensionReloadMessage() {
-  return globalThis.XAPExtensionContext.extensionReloadMessage();
+  return (
+    globalThis.XAPExtensionContext?.extensionReloadMessage?.() ||
+    "插件刚重新加载，当前页面还在使用旧脚本。请刷新 X Articles 页面后点击“刷新草稿”。"
+  );
 }
 
 async function readLocalStorage(keys) {
@@ -897,20 +903,29 @@ async function importBodyAndImages() {
   }
 }
 
-chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== "XAP_PAGE_STATUS") return;
-  sendResponse({
-    ok: true,
-    url: location.href,
-    title: document.title,
+try {
+  chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
+    if (message?.type !== "XAP_PAGE_STATUS") return;
+    sendResponse({
+      ok: true,
+      url: location.href,
+      title: document.title,
+      contentVersion: XAP_CONTENT_VERSION,
+    });
   });
-});
 
-chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName === "local" && changes.latestDraft) {
-    loadStoredDraft();
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "local" && changes.latestDraft) {
+      loadStoredDraft();
+    }
+  });
+} catch (error) {
+  if (isExtensionContextInvalidated(error)) {
+    setStatus(extensionReloadMessage());
+  } else {
+    throw error;
   }
-});
+}
 
 createPanel();
 refreshDraft();
