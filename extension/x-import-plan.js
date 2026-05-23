@@ -145,6 +145,26 @@
     };
   }
 
+  function prefixedDraftBlock(prefix, inline) {
+    const trimmed = trimInline(inline);
+    return {
+      type: "unstyled",
+      text: `${prefix}${trimmed.text}`,
+      inlineStyleRanges: (trimmed.inlineStyleRanges || []).map((range) => ({
+        ...range,
+        offset: range.offset + prefix.length,
+      })),
+      links: (trimmed.links || []).map((link) => ({
+        ...link,
+        offset: link.offset + prefix.length,
+      })),
+    };
+  }
+
+  function numberedDraftBlock(number, inline) {
+    return prefixedDraftBlock(`${number}. `, inline);
+  }
+
   function codeBlocksFromText(text) {
     const lines = String(text ?? "").split(/\n/);
     if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
@@ -154,6 +174,49 @@
       inlineStyleRanges: [],
       links: [],
     }));
+  }
+
+  function tableCellToText(value) {
+    return String(value || "")
+      .replace(/\[([^\]]+)]\((https?:\/\/[^)\s]+)\)/g, "$1 ($2)")
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      .replace(/~~([^~]+)~~/g, "$1")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1$2")
+      .replace(/\s+/g, " ")
+      .replace(/\|/g, "/")
+      .trim();
+  }
+
+  function tableTextFromRows(rows) {
+    const normalizedRows = rows
+      .map((row) => row.map(tableCellToText))
+      .filter((row) => row.some(Boolean));
+    if (!normalizedRows.length) return "";
+    const columnCount = Math.max(...normalizedRows.map((row) => row.length));
+    const fullRows = normalizedRows.map((row) =>
+      Array.from({ length: columnCount }, (_value, index) => row[index] || ""),
+    );
+    const lines = [fullRows[0].join(" | ")];
+    if (fullRows.length > 1) {
+      lines.push(Array.from({ length: columnCount }, () => "---").join(" | "));
+      lines.push(...fullRows.slice(1).map((row) => row.join(" | ")));
+    }
+    return lines.join("\n");
+  }
+
+  function tableBlocksFromRows(rows) {
+    const text = tableTextFromRows(rows);
+    return text ? codeBlocksFromText(text) : [];
+  }
+
+  function tableBlocksFromElement(element) {
+    const rows = Array.from(element.querySelectorAll?.("tr") || []).map((row) =>
+      Array.from(row.children || [])
+        .filter((cell) => ["td", "th"].includes(cell.tagName?.toLowerCase()))
+        .map((cell) => cell.textContent || ""),
+    );
+    return tableBlocksFromRows(rows);
   }
 
   function sourceBlocksFromHtml(bodyHtml) {
@@ -179,16 +242,24 @@
       if (tagName === "pre") {
         return codeBlocksFromText(element.textContent || "");
       }
+      if (tagName === "table") {
+        return tableBlocksFromElement(element);
+      }
       if (tagName === "blockquote") {
         const children = Array.from(element.children).filter((child) => child.tagName?.toLowerCase() === "p");
         const quoteBlocks = children.length ? children : [element];
         return quoteBlocks.map((child) => draftBlockFromInline("blockquote", inlineFromNode(child)));
       }
-      if (tagName === "ul" || tagName === "ol") {
-        const type = tagName === "ul" ? "unordered-list-item" : "ordered-list-item";
+      if (tagName === "ul") {
         return Array.from(element.children)
           .filter((child) => child.tagName?.toLowerCase() === "li")
-          .map((child) => draftBlockFromInline(type, inlineFromNode(child)));
+          .map((child) => draftBlockFromInline("unordered-list-item", inlineFromNode(child)));
+      }
+      if (tagName === "ol") {
+        const start = Number(element.getAttribute("start") || 1) || 1;
+        return Array.from(element.children)
+          .filter((child) => child.tagName?.toLowerCase() === "li")
+          .map((child, index) => numberedDraftBlock(start + index, inlineFromNode(child)));
       }
       return [draftBlockFromInline("unstyled", inlineFromNode(element))];
     });
@@ -202,6 +273,18 @@
       return draft.blocks.map((block) => {
         if (block.type === "code") {
           return codeBlocksFromText(block.text);
+        }
+        if (block.type === "table") {
+          return tableBlocksFromRows(block.rows || []);
+        }
+        if (block.type === "orderedList" && block.items) {
+          const start = Number(block.start || 1) || 1;
+          return block.items.map((item, index) => ({
+            type: "unstyled",
+            text: `${start + index}. ${String(item || "")}`,
+            inlineStyleRanges: [],
+            links: [],
+          }));
         }
         if (block.items) {
           return block.items.map((item) => ({

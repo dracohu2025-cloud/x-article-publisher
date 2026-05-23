@@ -154,3 +154,161 @@ test("maps HTML pre blocks to Draft.js code-block lines", () => {
     ],
   );
 });
+
+test("maps normalized table blocks to Draft.js code-block table lines", () => {
+  const planner = loadPlanner();
+  const plan = planner.buildXImportPlan({
+    plainText: "Intro\n\n能力 | 能帮你做什么\n--- | ---\n搜书 | 搜微信读书书城\n\nOutro",
+    blocks: [
+      { type: "paragraph", text: "Intro" },
+      {
+        type: "table",
+        rows: [
+          ["**能力**", "**能帮你做什么**"],
+          ["搜书", "搜微信读书书城"],
+        ],
+      },
+      { type: "paragraph", text: "Outro" },
+    ],
+    contentImages: [
+      { marker: "[XAP-IMG-01]", blockIndex: 1, path: "/tmp/image-01.png" },
+    ],
+  });
+
+  assert.deepEqual(
+    plan.blocks.map((block) => ({ type: block.type, text: block.text })),
+    [
+      { type: "unstyled", text: "Intro" },
+      { type: "code-block", text: "能力 | 能帮你做什么" },
+      { type: "code-block", text: "--- | ---" },
+      { type: "code-block", text: "搜书 | 搜微信读书书城" },
+      { type: "unstyled", text: "[XAP-IMG-01]" },
+      { type: "unstyled", text: "Outro" },
+    ],
+  );
+});
+
+test("maps HTML table blocks to Draft.js code-block table lines", () => {
+  const table = {
+    tagName: "TABLE",
+    querySelectorAll(selector) {
+      if (selector !== "tr") return [];
+      return [
+        {
+          children: [
+            { tagName: "TH", textContent: "能力" },
+            { tagName: "TH", textContent: "能帮你做什么" },
+          ],
+        },
+        {
+          children: [
+            { tagName: "TD", textContent: "搜书" },
+            { tagName: "TD", textContent: "搜微信读书书城" },
+          ],
+        },
+      ];
+    },
+  };
+  const planner = loadPlanner({
+    DOMParser: class {
+      parseFromString() {
+        return {
+          querySelector() {
+            return { children: [table] };
+          },
+        };
+      }
+    },
+  });
+  const plan = planner.buildXImportPlan({
+    bodyHtml: "<table><thead><tr><th>能力</th><th>能帮你做什么</th></tr></thead></table>",
+    plainText: "",
+    contentImages: [],
+  });
+
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(plan.blocks.map((block) => ({ type: block.type, text: block.text }))),
+    ),
+    [
+      { type: "code-block", text: "能力 | 能帮你做什么" },
+      { type: "code-block", text: "--- | ---" },
+      { type: "code-block", text: "搜书 | 搜微信读书书城" },
+    ],
+  );
+});
+
+test("imports ordered lists as explicit numbered paragraphs", () => {
+  const planner = loadPlanner({
+    Node: {
+      TEXT_NODE: 3,
+      ELEMENT_NODE: 1,
+    },
+    DOMParser: class {
+      parseFromString() {
+        const text = (value) => ({ nodeType: 3, nodeValue: value });
+        const li = (value) => ({
+          nodeType: 1,
+          tagName: "LI",
+          childNodes: [text(value)],
+          getAttribute() {
+            return null;
+          },
+        });
+        return {
+          querySelector() {
+            return {
+              children: [
+                {
+                  nodeType: 1,
+                  tagName: "OL",
+                  children: [li("第二步"), li("第三步")],
+                  getAttribute(name) {
+                    return name === "start" ? "2" : null;
+                  },
+                },
+              ],
+            };
+          },
+        };
+      }
+    },
+  });
+  const plan = planner.buildXImportPlan({
+    bodyHtml: '<ol start="2"><li>第二步</li><li>第三步</li></ol>',
+    plainText: "",
+    contentImages: [],
+  });
+
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(plan.blocks.map((block) => ({ type: block.type, text: block.text }))),
+    ),
+    [
+      { type: "unstyled", text: "2. 第二步" },
+      { type: "unstyled", text: "3. 第三步" },
+    ],
+  );
+});
+
+test("imports structured ordered lists as explicit numbered paragraphs before markers", () => {
+  const planner = loadPlanner();
+  const plan = planner.buildXImportPlan({
+    blocks: [
+      { type: "orderedList", start: 2, items: ["第二步"] },
+      { type: "orderedList", start: 3, items: ["第三步"] },
+    ],
+    contentImages: [
+      { marker: "[XAP-IMG-01]", blockIndex: 0, path: "/tmp/image-01.png" },
+    ],
+  });
+
+  assert.deepEqual(
+    plan.blocks.map((block) => ({ type: block.type, text: block.text })),
+    [
+      { type: "unstyled", text: "2. 第二步" },
+      { type: "unstyled", text: "[XAP-IMG-01]" },
+      { type: "unstyled", text: "3. 第三步" },
+    ],
+  );
+});
