@@ -32,6 +32,7 @@
   function mapDraftBlockType(block) {
     if (!block) return "unstyled";
     if (block.kind) return block.kind;
+    if (block.type === "code") return "code-block";
     if (block.type === "heading") return `header-${block.level === 3 ? "three" : "two"}`;
     if (block.type === "quote") return "blockquote";
     if (block.type === "unorderedList") return "unordered-list-item";
@@ -144,6 +145,17 @@
     };
   }
 
+  function codeBlocksFromText(text) {
+    const lines = String(text ?? "").split(/\n/);
+    if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+    return lines.map((line) => ({
+      type: "code-block",
+      text: line,
+      inlineStyleRanges: [],
+      links: [],
+    }));
+  }
+
   function sourceBlocksFromHtml(bodyHtml) {
     if (typeof DOMParser === "undefined" || !bodyHtml) return [];
     const doc = new DOMParser().parseFromString(
@@ -163,6 +175,9 @@
       }
       if (tagName === "h3" || tagName === "h4" || tagName === "h5" || tagName === "h6") {
         return [draftBlockFromInline("header-three", inlineFromNode(element))];
+      }
+      if (tagName === "pre") {
+        return codeBlocksFromText(element.textContent || "");
       }
       if (tagName === "blockquote") {
         const children = Array.from(element.children).filter((child) => child.tagName?.toLowerCase() === "p");
@@ -185,6 +200,9 @@
 
     if (Array.isArray(draft?.blocks) && draft.blocks.length) {
       return draft.blocks.map((block) => {
+        if (block.type === "code") {
+          return codeBlocksFromText(block.text);
+        }
         if (block.items) {
           return block.items.map((item) => ({
             type: mapDraftBlockType(block),

@@ -1,7 +1,9 @@
-import { inlineMarkdownToHtml } from "./html.mjs";
+import { escapeHtml, inlineMarkdownToHtml } from "./html.mjs";
 
 const IMAGE_RE = /^<image\s+([^>]+)\/>\s*$/;
 const ATTR_RE = /([a-zA-Z_-]+)="([^"]*)"/g;
+const CODE_FENCE_RE = /^```(.*)$/;
+const CODE_FENCE_CLOSE_RE = /^```\s*$/;
 
 function attrsToObject(value) {
   const attrs = {};
@@ -38,6 +40,28 @@ function pushQuote(blocks, lines) {
   lines.length = 0;
 }
 
+function pushCode(blocks, code) {
+  if (!code) return null;
+  const block = {
+    type: "code",
+    text: code.lines.join("\n"),
+  };
+  if (code.language) block.language = code.language;
+  if (code.meta) block.meta = code.meta;
+  blocks.push(block);
+  return null;
+}
+
+function parseCodeFenceInfo(info) {
+  const trimmed = String(info || "").trim();
+  if (!trimmed) return {};
+  const [language, ...metaParts] = trimmed.split(/\s+/);
+  return {
+    language,
+    meta: metaParts.join(" ") || undefined,
+  };
+}
+
 function blockPreview(block) {
   if (!block) return "";
   const text = block.items ? block.items.join(" / ") : block.text;
@@ -52,6 +76,7 @@ export function parseLarkMarkdown(markdown) {
   const quoteLines = [];
   let currentList = null;
   let inQuote = false;
+  let currentCode = null;
 
   function flushTextBlocks() {
     pushParagraph(blocks, paragraph);
@@ -60,12 +85,31 @@ export function parseLarkMarkdown(markdown) {
   }
 
   for (const rawLine of String(markdown).split(/\r?\n/)) {
+    if (currentCode) {
+      if (CODE_FENCE_CLOSE_RE.test(rawLine.trim())) {
+        currentCode = pushCode(blocks, currentCode);
+      } else {
+        currentCode.lines.push(rawLine);
+      }
+      continue;
+    }
+
     const line = rawLine.trim();
 
     if (!line) {
       if (!inQuote) {
         flushTextBlocks();
       }
+      continue;
+    }
+
+    const codeFenceMatch = line.match(CODE_FENCE_RE);
+    if (!inQuote && codeFenceMatch) {
+      flushTextBlocks();
+      currentCode = {
+        ...parseCodeFenceInfo(codeFenceMatch[1]),
+        lines: [],
+      };
       continue;
     }
 
@@ -145,6 +189,10 @@ export function parseLarkMarkdown(markdown) {
   if (inQuote) {
     warnings.push("检测到未闭合的 quote-container，已按引用块收尾。");
   }
+  if (currentCode) {
+    warnings.push("检测到未闭合的代码块，已按代码块收尾。");
+    currentCode = pushCode(blocks, currentCode);
+  }
   flushTextBlocks();
 
   return {
@@ -175,6 +223,8 @@ export function blocksToHtml(blocks) {
             .split(/\n+/)
             .map((line) => `<p>${inlineMarkdownToHtml(line)}</p>`)
             .join("")}</blockquote>`;
+        case "code":
+          return `<pre><code>${escapeHtml(block.text).replace(/\n/g, "&#10;")}</code></pre>`;
         case "paragraph":
         default:
           return `<p>${inlineMarkdownToHtml(block.text)}</p>`;
@@ -187,6 +237,7 @@ export function blocksToPlainText(blocks) {
   return blocks
     .map((block) => {
       if (block.items) return block.items.map((item) => `- ${item}`).join("\n");
+      if (block.type === "code") return block.text;
       return block.text;
     })
     .filter(Boolean)

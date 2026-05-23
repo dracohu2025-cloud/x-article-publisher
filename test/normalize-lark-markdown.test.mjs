@@ -39,3 +39,36 @@ test("preserves Feishu line breaks as separate paragraphs", () => {
   assert.match(draft.bodyHtml, /<p>第一段<\/p>\n<p>第二段<\/p>\n<p>第三段<\/p>/);
   assert.equal(draft.stats.blockCount, 3);
 });
+
+test("normalizes fenced code blocks for X Article code block import", () => {
+  const draft = normalizeLarkMarkdown({
+    title: "代码块测试",
+    markdown: `这是今天早晨推送的cron job:
+
+\`\`\`plaintext {wrap}
+Cronjob Response: 微信读书飞书增量同步日报
+
+(job_id: 5c625b6f8e6a)
+  indented line
+\`\`\`
+
+收尾段落`,
+  });
+
+  assert.deepEqual(draft.blocks, [
+    { type: "paragraph", text: "这是今天早晨推送的cron job:" },
+    {
+      type: "code",
+      text: "Cronjob Response: 微信读书飞书增量同步日报\n\n(job_id: 5c625b6f8e6a)\n  indented line",
+      language: "plaintext",
+      meta: "{wrap}",
+    },
+    { type: "paragraph", text: "收尾段落" },
+  ]);
+  assert.match(
+    draft.bodyHtml,
+    /<pre><code>Cronjob Response: 微信读书飞书增量同步日报&#10;&#10;\(job_id: 5c625b6f8e6a\)&#10;  indented line<\/code><\/pre>/,
+  );
+  assert.doesNotMatch(draft.bodyHtml, /```/);
+  assert.equal(draft.stats.blockCount, 3);
+});

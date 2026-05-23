@@ -3,12 +3,12 @@ import fs from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 
-function loadPlanner() {
+function loadPlanner(overrides = {}) {
   const source = fs.readFileSync(
     new URL("../extension/x-import-plan.js", import.meta.url),
     "utf8",
   );
-  const sandbox = {};
+  const sandbox = { ...overrides };
   sandbox.globalThis = sandbox;
   vm.runInNewContext(source, sandbox);
   return sandbox.XAPImportPlan;
@@ -88,6 +88,69 @@ test("builds structured Draft.js blocks with markers after source blocks", () =>
       { type: "unordered-list-item", text: "B" },
       { type: "unstyled", text: "[XAP-IMG-01]" },
       { type: "blockquote", text: "Outro" },
+    ],
+  );
+});
+
+test("maps normalized code blocks to Draft.js code-block lines", () => {
+  const planner = loadPlanner();
+  const plan = planner.buildXImportPlan({
+    plainText: "Intro\n\nline one\n\nline three\n\nOutro",
+    blocks: [
+      { type: "paragraph", text: "Intro" },
+      { type: "code", text: "line one\n\nline three", language: "plaintext" },
+      { type: "paragraph", text: "Outro" },
+    ],
+    contentImages: [
+      { marker: "[XAP-IMG-01]", blockIndex: 1, path: "/tmp/image-01.png" },
+    ],
+  });
+
+  assert.deepEqual(
+    plan.blocks.map((block) => ({ type: block.type, text: block.text })),
+    [
+      { type: "unstyled", text: "Intro" },
+      { type: "code-block", text: "line one" },
+      { type: "code-block", text: "" },
+      { type: "code-block", text: "line three" },
+      { type: "unstyled", text: "[XAP-IMG-01]" },
+      { type: "unstyled", text: "Outro" },
+    ],
+  );
+});
+
+test("maps HTML pre blocks to Draft.js code-block lines", () => {
+  const planner = loadPlanner({
+    DOMParser: class {
+      parseFromString() {
+        return {
+          querySelector() {
+            return {
+              children: [
+                {
+                  tagName: "PRE",
+                  textContent: "line one\nline two\n",
+                },
+              ],
+            };
+          },
+        };
+      }
+    },
+  });
+  const plan = planner.buildXImportPlan({
+    bodyHtml: "<pre><code>line one&#10;line two</code></pre>",
+    plainText: "line one\nline two",
+    contentImages: [],
+  });
+
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(plan.blocks.map((block) => ({ type: block.type, text: block.text }))),
+    ),
+    [
+      { type: "code-block", text: "line one" },
+      { type: "code-block", text: "line two" },
     ],
   );
 });
