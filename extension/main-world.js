@@ -1,7 +1,7 @@
 (function installXAPMainWorldBridge() {
   const CHANNEL_TO_MAIN = "xap";
   const CHANNEL_FROM_MAIN = "xap-main";
-  const BRIDGE_VERSION = "draft-block-write-v1";
+  const BRIDGE_VERSION = "draft-block-write-v2";
   const EDITOR_SELECTOR =
     "[data-contents='true'] [contenteditable='true'], [contenteditable='true'][role='textbox'], [contenteditable='true'].public-DraftEditor-content, [contenteditable='true']";
 
@@ -619,6 +619,44 @@
     return { moved: moves.size, missing, mediaBlocks: mediaBlocks.length };
   }
 
+  function removeUploadedMarkerBlocks(draftNode, uploads) {
+    if (!draftNode || !uploads.length) return { removed: 0 };
+    const markers = new Set(uploads.map((upload) => upload.marker).filter(Boolean));
+    if (!markers.size) return { removed: 0 };
+
+    const editorState = draftNode.props.editorState;
+    const EditorState = editorState.constructor;
+    const SelectionState = editorState.getSelection().constructor;
+    const contentState = editorState.getCurrentContent();
+    const blockMap = contentState.getBlockMap();
+    const keptKeys = [];
+    let removed = 0;
+
+    blockMap.forEach((block, key) => {
+      const text = (block.getText() || "").trim();
+      if (block.getType() !== "atomic" && markers.has(text)) {
+        removed += 1;
+        return;
+      }
+      keptKeys.push(key);
+    });
+
+    if (!removed || !keptKeys.length) return { removed };
+
+    let nextBlockMap = blockMap.constructor();
+    for (const key of keptKeys) nextBlockMap = nextBlockMap.set(key, blockMap.get(key));
+    const lastKey = keptKeys[keptKeys.length - 1];
+    const selection = SelectionState.createEmpty(lastKey);
+    const nextContent = contentState
+      .set("blockMap", nextBlockMap)
+      .set("selectionBefore", selection)
+      .set("selectionAfter", selection);
+    let nextEditorState = EditorState.push(editorState, nextContent, "remove-range");
+    nextEditorState = EditorState.moveSelectionToEnd(nextEditorState);
+    draftNode.props.onChange(nextEditorState);
+    return { removed };
+  }
+
   async function runFlow(payload) {
     const imageOps = payload.images || [];
     let draftNode = findDraftStateNode();
@@ -709,9 +747,16 @@
       summary.relocationMissing = result.missing;
       summary.mediaBlocksSeen = result.mediaBlocks;
       progress(`图片重排完成：移动 ${result.moved}/${uploads.length}，缺失 ${result.missing || 0}`);
+      await sleep(500);
+      draftNode = findDraftStateNode() || draftNode;
+      const cleanup = removeUploadedMarkerBlocks(draftNode, uploads);
+      summary.removedMarkers = cleanup.removed;
+      if (cleanup.removed > 0) {
+        progress(`已清理 ${cleanup.removed}/${uploads.length} 个图片 marker。`);
+      }
       const confirmation = await waitForMarkerCountAtMost(
         payload.markerPrefix,
-        0,
+        Math.max(0, imageOps.length - uploads.length),
         15000,
         3500,
       );
