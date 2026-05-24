@@ -24,6 +24,48 @@ test("keeps the first Feishu image in the body image queue", () => {
   );
 });
 
+test("adds table placeholders to the body image queue", () => {
+  const rows = [
+    ["**能力**", "**能帮你做什么**"],
+    ["搜书", "搜微信读书书城"],
+  ];
+  const result = buildDraftImages(
+    [{ token: "body-token", blockIndex: 0, path: "/tmp/image-01.png" }],
+    [
+      { type: "paragraph", text: "Intro" },
+      { type: "table", rows },
+      { type: "paragraph", text: "Outro" },
+    ],
+  );
+
+  assert.equal(result.coverImage, null);
+  assert.deepEqual(
+    result.contentImages.map((image) => ({
+      kind: image.kind,
+      marker: image.marker,
+      blockIndex: image.blockIndex,
+      path: image.path,
+      rows: image.table?.rows,
+    })),
+    [
+      {
+        kind: undefined,
+        marker: "[XAP-IMG-01]",
+        blockIndex: 0,
+        path: "/tmp/image-01.png",
+        rows: undefined,
+      },
+      {
+        kind: "table",
+        marker: "[XAP-IMG-02]",
+        blockIndex: 1,
+        path: undefined,
+        rows,
+      },
+    ],
+  );
+});
+
 test("retries transient Feishu media download failures", async () => {
   const assetsDir = await fs.mkdtemp(path.join(os.tmpdir(), "xap-media-retry-"));
   let calls = 0;

@@ -141,10 +141,46 @@ export async function downloadImages(images, assetsDir, options = {}) {
   return resolved;
 }
 
-export function buildDraftImages(images) {
+function tablePreview(rows) {
+  return rows
+    .flat()
+    .map((cell) => String(cell || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join(" / ")
+    .slice(0, 80);
+}
+
+function buildTableImages(blocks = []) {
+  return blocks
+    .map((block, blockIndex) => ({ block, blockIndex }))
+    .filter(({ block }) => block?.type === "table" && Array.isArray(block.rows))
+    .map(({ block, blockIndex }) => ({
+      kind: "table",
+      token: `table-${String(blockIndex + 1).padStart(2, "0")}`,
+      blockIndex,
+      afterText: tablePreview(block.rows),
+      table: {
+        rows: block.rows,
+        attrs: block.attrs || {},
+      },
+    }));
+}
+
+export function buildDraftImages(images, blocks = []) {
+  const bodyImages = images.map((image) => ({ ...image, kind: image.kind }));
+  const tableImages = buildTableImages(blocks);
+  const contentImages = [...bodyImages, ...tableImages].sort((left, right) => {
+    const leftBlock = Number(left.blockIndex || 0);
+    const rightBlock = Number(right.blockIndex || 0);
+    if (leftBlock !== rightBlock) return leftBlock - rightBlock;
+    if (left.kind === "table" && right.kind !== "table") return -1;
+    if (left.kind !== "table" && right.kind === "table") return 1;
+    return 0;
+  });
+
   return {
     coverImage: null,
-    contentImages: images.map((image, index) => ({
+    contentImages: contentImages.map((image, index) => ({
       ...image,
       marker: `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
     })),
@@ -182,7 +218,8 @@ export async function prepareFeishuDoc({
     });
   }
 
-  const { coverImage, contentImages } = buildDraftImages(downloadedImages);
+  const { coverImage, contentImages } = buildDraftImages(downloadedImages, normalized.blocks);
+  const tableImageCount = contentImages.filter((image) => image.kind === "table").length;
   const mediaWarnings = downloadedImages
     .flatMap((image, index) =>
       image.downloadError
@@ -206,7 +243,12 @@ export async function prepareFeishuDoc({
     coverImage,
     contentImages,
     warnings: [...normalized.warnings, ...mediaWarnings],
-    stats: normalized.stats,
+    stats: {
+      ...normalized.stats,
+      imageCount: contentImages.length,
+      sourceImageCount: normalized.stats.imageCount,
+      tableImageCount,
+    },
     generatedAt: new Date().toISOString(),
   };
 

@@ -230,6 +230,48 @@ test("maps normalized table blocks to Draft.js code-block table lines", () => {
   );
 });
 
+test("uses rendered table image markers instead of duplicate table text", () => {
+  const planner = loadPlanner();
+  const rows = [
+    ["**能力**", "**能帮你做什么**"],
+    ["搜书", "搜微信读书书城"],
+  ];
+  const plan = planner.buildXImportPlan({
+    plainText: "Intro\n\n能力 | 能帮你做什么\n--- | ---\n搜书 | 搜微信读书书城\n\nOutro",
+    blocks: [
+      { type: "paragraph", text: "Intro" },
+      { type: "table", rows },
+      { type: "paragraph", text: "Outro" },
+    ],
+    contentImages: [
+      {
+        kind: "table",
+        marker: "[XAP-IMG-01]",
+        blockIndex: 1,
+        table: { rows },
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    plan.blocks.map((block) => ({ type: block.type, text: block.text })),
+    [
+      { type: "unstyled", text: "Intro" },
+      { type: "unstyled", text: "[XAP-IMG-01]" },
+      { type: "unstyled", text: "Outro" },
+    ],
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(plan.images)), [
+    {
+      kind: "table",
+      marker: "[XAP-IMG-01]",
+      blockIndex: 1,
+      table: { rows },
+    },
+  ]);
+  assert.equal(plan.importableContentImages, 1);
+});
+
 test("maps HTML table blocks to Draft.js code-block table lines", () => {
   const table = {
     tagName: "TABLE",

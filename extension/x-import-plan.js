@@ -17,9 +17,8 @@
       markersByBlock.set(blockIndex, items);
 
       images.push({
+        ...image,
         marker,
-        path: image.path,
-        token: image.token,
         blockIndex,
       });
     });
@@ -28,7 +27,25 @@
   }
 
   function hasImportableImageFile(image) {
-    return Boolean(image?.path);
+    return Boolean(image?.path || isTableImage(image));
+  }
+
+  function isTableImage(image) {
+    return Boolean(
+      image?.kind === "table" &&
+        Array.isArray(image?.table?.rows) &&
+        image.table.rows.some((row) =>
+          Array.isArray(row) && row.some((cell) => String(cell || "").trim()),
+        ),
+    );
+  }
+
+  function tableImageBlockIndexes(images = []) {
+    return new Set(
+      images
+        .filter(isTableImage)
+        .map((image) => Math.max(0, Number(image?.blockIndex || 0))),
+    );
   }
 
   function mapDraftBlockType(block) {
@@ -221,7 +238,7 @@
     return tableBlocksFromRows(rows);
   }
 
-  function sourceBlocksFromHtml(bodyHtml) {
+  function sourceBlocksFromHtml(bodyHtml, options = {}) {
     if (typeof DOMParser === "undefined" || !bodyHtml) return [];
     const doc = new DOMParser().parseFromString(
       `<main id="xap-import-root">${bodyHtml}</main>`,
@@ -230,7 +247,9 @@
     const root = doc.querySelector("#xap-import-root");
     if (!root) return [];
 
-    return Array.from(root.children).map((element) => {
+    const skipTableIndexes = options.skipTableIndexes || new Set();
+
+    return Array.from(root.children).map((element, index) => {
       const tagName = element.tagName.toLowerCase();
       if (tagName === "h1") {
         return [draftBlockFromInline("header-one", inlineFromNode(element))];
@@ -245,6 +264,7 @@
         return codeBlocksFromText(element.textContent || "");
       }
       if (tagName === "table") {
+        if (skipTableIndexes.has(index)) return [];
         return tableBlocksFromElement(element);
       }
       if (tagName === "blockquote") {
@@ -267,16 +287,18 @@
     });
   }
 
-  function sourceBlocksFromDraft(draft) {
-    const htmlBlocks = sourceBlocksFromHtml(draft?.bodyHtml);
+  function sourceBlocksFromDraft(draft, options = {}) {
+    const htmlBlocks = sourceBlocksFromHtml(draft?.bodyHtml, options);
     if (htmlBlocks.length) return htmlBlocks;
 
     if (Array.isArray(draft?.blocks) && draft.blocks.length) {
-      return draft.blocks.map((block) => {
+      const skipTableIndexes = options.skipTableIndexes || new Set();
+      return draft.blocks.map((block, index) => {
         if (block.type === "code") {
           return codeBlocksFromText(block.text);
         }
         if (block.type === "table") {
+          if (skipTableIndexes.has(index)) return [];
           return tableBlocksFromRows(block.rows || []);
         }
         if (block.type === "orderedList" && block.items) {
@@ -354,12 +376,13 @@
     const blocks = String(draft?.bodyHtml || "").split("\n");
     const { selectedImages } = contentImagesForPlan(draft, options);
     const { markersByBlock } = groupMarkersByBlock(selectedImages);
+    const skipTableIndexes = tableImageBlockIndexes(selectedImages);
 
     return blocks
       .flatMap((block, index) => {
         const markers = markersByBlock.get(index) || [];
         return [
-          block,
+          ...(skipTableIndexes.has(index) ? [] : [block]),
           ...markers.map((marker) => `<p><strong>${marker}</strong></p>`),
         ];
       })
@@ -367,8 +390,9 @@
   }
 
   function draftBlocksWithMarkers(draft, options = {}) {
-    const sourceBlocks = sourceBlocksFromDraft(draft);
     const { selectedImages } = contentImagesForPlan(draft, options);
+    const skipTableIndexes = tableImageBlockIndexes(selectedImages);
+    const sourceBlocks = sourceBlocksFromDraft(draft, { skipTableIndexes });
     const { markersByBlock } = groupMarkersByBlock(selectedImages);
 
     return sourceBlocks.flatMap((sourceBlock, index) => {
@@ -392,11 +416,12 @@
       .filter(Boolean);
     const { selectedImages } = contentImagesForPlan(draft, options);
     const { markersByBlock } = groupMarkersByBlock(selectedImages);
+    const skipTableIndexes = tableImageBlockIndexes(selectedImages);
 
     return lines
       .flatMap((line, index) => {
         const markers = markersByBlock.get(index) || [];
-        return [line, ...markers];
+        return [...(skipTableIndexes.has(index) ? [] : [line]), ...markers];
       })
       .join("\n\n");
   }

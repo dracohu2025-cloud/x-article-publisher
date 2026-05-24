@@ -20,6 +20,20 @@ function assetUrl(image) {
   return `${helperBase}/asset?path=${encodeURIComponent(image.path)}`;
 }
 
+function isTableImage(image) {
+  return Boolean(
+    image?.kind === "table" &&
+      Array.isArray(image?.table?.rows) &&
+      image.table.rows.some((row) =>
+        Array.isArray(row) && row.some((cell) => String(cell || "").trim()),
+      ),
+  );
+}
+
+function isUploadableImage(image) {
+  return Boolean(image?.path || isTableImage(image));
+}
+
 function setStatus(message) {
   if (els.status) {
     els.status.textContent = message;
@@ -35,7 +49,7 @@ function uploadableContentImages(draft) {
       ...image,
       marker: image?.marker || `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
     }))
-    .filter((image) => image.path);
+    .filter(isUploadableImage);
 }
 
 function imageLimitInfo(draft) {
@@ -47,7 +61,7 @@ function imageLimitInfo(draft) {
     marker: image?.marker || `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
   }));
   const uploadableImages = uploadableContentImages(draft);
-  const unavailableImages = allImages.filter((image) => !image.path);
+  const unavailableImages = allImages.filter((image) => !isUploadableImage(image));
   const coverSlots = 0;
   const maxContentImages = Math.max(0, X_ARTICLE_MAX_IMAGES - coverSlots);
   const selectedImages = uploadableImages.slice(0, maxContentImages);
@@ -776,6 +790,157 @@ async function fetchImageFile(image, fallbackName) {
   };
 }
 
+function tableCellToDisplayText(value) {
+  return String(value || "")
+    .replace(/\[([^\]]+)]\((https?:\/\/[^)\s]+)\)/g, "$1 ($2)")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/~~([^~]+)~~/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1$2")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeTableRowsForRender(rows) {
+  const normalizedRows = rows
+    .map((row) => (Array.isArray(row) ? row.map(tableCellToDisplayText) : []))
+    .filter((row) => row.some(Boolean));
+  if (!normalizedRows.length) return [];
+
+  const columnCount = Math.max(...normalizedRows.map((row) => row.length));
+  return normalizedRows.map((row) =>
+    Array.from({ length: columnCount }, (_value, index) => row[index] || ""),
+  );
+}
+
+function wrapCanvasText(context, text, maxWidth) {
+  const value = String(text || "");
+  if (!value) return [""];
+
+  const lines = [];
+  let current = "";
+  for (const char of Array.from(value)) {
+    const next = current + char;
+    if (current && context.measureText(next).width > maxWidth) {
+      lines.push(current);
+      current = char.trimStart();
+    } else {
+      current = next;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.length ? lines : [""];
+}
+
+async function renderTableImageFile(image, fallbackName) {
+  const rows = normalizeTableRowsForRender(image.table.rows);
+  if (!rows.length) {
+    throw new Error(`表格内容为空: ${image.marker || fallbackName}`);
+  }
+
+  const fontFamily =
+    'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  const headerFont = `700 18px ${fontFamily}`;
+  const bodyFont = `500 17px ${fontFamily}`;
+  const paddingX = 18;
+  const paddingY = 13;
+  const lineHeight = 25;
+  const minColumnWidth = 150;
+  const maxColumnWidth = 360;
+  const maxTableWidth = 1280;
+  const columnCount = Math.max(...rows.map((row) => row.length));
+
+  const measureCanvas = document.createElement("canvas");
+  const measureContext = measureCanvas.getContext("2d");
+  measureContext.font = bodyFont;
+  let columnWidths = Array.from({ length: columnCount }, (_value, columnIndex) => {
+    const contentWidth = Math.max(
+      ...rows.map((row, rowIndex) => {
+        measureContext.font = rowIndex === 0 ? headerFont : bodyFont;
+        return measureContext.measureText(row[columnIndex] || "").width;
+      }),
+      minColumnWidth - paddingX * 2,
+    );
+    return Math.min(maxColumnWidth, Math.ceil(contentWidth + paddingX * 2));
+  });
+
+  const tableWidth = columnWidths.reduce((sum, width) => sum + width, 0);
+  if (tableWidth > maxTableWidth) {
+    const scale = maxTableWidth / tableWidth;
+    columnWidths = columnWidths.map((width) =>
+      Math.max(minColumnWidth, Math.floor(width * scale)),
+    );
+  }
+
+  const wrappedRows = rows.map((row, rowIndex) =>
+    row.map((cell, columnIndex) => {
+      measureContext.font = rowIndex === 0 ? headerFont : bodyFont;
+      return wrapCanvasText(measureContext, cell, columnWidths[columnIndex] - paddingX * 2);
+    }),
+  );
+  const rowHeights = wrappedRows.map((row) =>
+    Math.max(52, Math.max(...row.map((lines) => lines.length)) * lineHeight + paddingY * 2),
+  );
+  const width = columnWidths.reduce((sum, item) => sum + item, 0);
+  const height = rowHeights.reduce((sum, item) => sum + item, 0);
+  const scale = Math.min(2, window.devicePixelRatio || 1);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(width * scale);
+  canvas.height = Math.ceil(height * scale);
+
+  const context = canvas.getContext("2d");
+  context.scale(scale, scale);
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+  context.textBaseline = "top";
+
+  let y = 0;
+  for (const [rowIndex, row] of wrappedRows.entries()) {
+    let x = 0;
+    const isHeader = rowIndex === 0;
+    for (const [columnIndex, lines] of row.entries()) {
+      const cellWidth = columnWidths[columnIndex];
+      const cellHeight = rowHeights[rowIndex];
+      context.fillStyle = isHeader ? "#f2f5f7" : rowIndex % 2 === 0 ? "#ffffff" : "#fafafa";
+      context.fillRect(x, y, cellWidth, cellHeight);
+      context.strokeStyle = "#d5dde3";
+      context.lineWidth = 1;
+      context.strokeRect(x + 0.5, y + 0.5, cellWidth, cellHeight);
+      context.font = isHeader ? headerFont : bodyFont;
+      context.fillStyle = "#0f1419";
+      lines.forEach((line, lineIndex) => {
+        context.fillText(line, x + paddingX, y + paddingY + lineIndex * lineHeight);
+      });
+      x += cellWidth;
+    }
+    y += rowHeights[rowIndex];
+  }
+
+  const blob = await new Promise((resolve) => {
+    canvas.toBlob(resolve, "image/png");
+  });
+  if (!blob) {
+    throw new Error(`表格图片生成失败: ${image.marker || fallbackName}`);
+  }
+
+  const buffer = await blob.arrayBuffer();
+  return {
+    base64: arrayBufferToBase64(buffer),
+    mime: "image/png",
+    fileName: `${fallbackName}-table.png`,
+    bytes: blob.size,
+    originalBytes: blob.size,
+    compressed: false,
+  };
+}
+
+async function prepareImageFile(image, fallbackName) {
+  if (isTableImage(image)) {
+    return renderTableImageFile(image, fallbackName);
+  }
+  return fetchImageFile(image, fallbackName);
+}
+
 async function prepareImportPayload() {
   const limit = imageLimitInfo(state.draft);
   const plan = globalThis.XAPImportPlan.buildXImportPlan(state.draft, {
@@ -787,7 +952,7 @@ async function prepareImportPayload() {
   for (let index = 0; index < plan.images.length; index += 1) {
     const image = plan.images[index];
     setStatus(`正在准备图片 ${index + 1}/${plan.images.length}: ${image.marker}`);
-    const file = await fetchImageFile(image, `image-${index + 1}`);
+    const file = await prepareImageFile(image, `image-${index + 1}`);
     fileMap.set(image.marker, file);
     imageOps.push({
       marker: image.marker,
