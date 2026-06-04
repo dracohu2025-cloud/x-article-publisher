@@ -1,6 +1,6 @@
 const helperBase = "http://127.0.0.1:49231";
 const XAP_CONTENT_VERSION = "context-safe-storage-v2";
-const X_ARTICLE_MAX_IMAGES = 26;
+const X_ARTICLE_MAX_IMAGES = 25;
 const FEISHU_MEDIA_TIMEOUT_MS = 15_000;
 const FEISHU_MEDIA_MAX_ATTEMPTS = 3;
 
