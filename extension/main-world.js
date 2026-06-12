@@ -4,8 +4,32 @@
   const BRIDGE_VERSION = "draft-block-write-v2";
   const EDITOR_SELECTOR =
     "[data-contents='true'] [contenteditable='true'], [contenteditable='true'][role='textbox'], [contenteditable='true'].public-DraftEditor-content, [contenteditable='true']";
+  const BASE_MEDIA_UPLOAD_TIMEOUT_MS = 45_000;
+  const LARGE_BATCH_MEDIA_UPLOAD_TIMEOUT_MS = 90_000;
+  const RETRY_MEDIA_UPLOAD_TIMEOUT_MS = 120_000;
+  const MAX_MEDIA_UPLOAD_TIMEOUT_MS = 150_000;
+  const LARGE_BATCH_SIZE = 16;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  function uploadTimeoutMs({ total = 1, index = 1, attempt = 1 } = {}) {
+    const imageCount = Math.max(1, Number(total) || 1);
+    const imageIndex = Math.max(1, Number(index) || 1);
+    const uploadAttempt = Math.max(1, Number(attempt) || 1);
+    const largeBatch = imageCount >= LARGE_BATCH_SIZE || imageIndex >= LARGE_BATCH_SIZE;
+    const base = largeBatch
+      ? LARGE_BATCH_MEDIA_UPLOAD_TIMEOUT_MS + Math.max(0, imageIndex - LARGE_BATCH_SIZE) * 2_500
+      : BASE_MEDIA_UPLOAD_TIMEOUT_MS;
+    const withRetry = uploadAttempt > 1 ? Math.max(base, RETRY_MEDIA_UPLOAD_TIMEOUT_MS) : base;
+    return Math.min(MAX_MEDIA_UPLOAD_TIMEOUT_MS, withRetry);
+  }
+
+  function retryDelayMs({ total = 1, attempt = 1 } = {}) {
+    const imageCount = Math.max(1, Number(total) || 1);
+    const uploadAttempt = Math.max(1, Number(attempt) || 1);
+    const base = imageCount >= LARGE_BATCH_SIZE ? 5_000 : 1_400;
+    return base * uploadAttempt;
+  }
 
   function post(kind, payload = {}) {
     window.postMessage({ source: CHANNEL_FROM_MAIN, kind, ...payload }, "*");
@@ -458,7 +482,12 @@
     });
   }
 
-  async function uploadImageAtMarker(draftNode, operation, protectedAtomicBlocks = new Set()) {
+  async function uploadImageAtMarker(
+    draftNode,
+    operation,
+    protectedAtomicBlocks = new Set(),
+    uploadContext = {},
+  ) {
     const stableBefore = await waitForStableMediaCount(protectedAtomicBlocks, 0, {
       timeoutMs: 12000,
       stableMs: 900,
@@ -485,7 +514,8 @@
 
     const before = existingMediaEntities(draftNode.props.editorState.getCurrentContent());
     onFilesAdded([file]);
-    const deadline = Date.now() + 45000;
+    const timeoutMs = uploadTimeoutMs(uploadContext);
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       await sleep(350);
       draftNode = findDraftStateNode() || draftNode;
@@ -511,7 +541,7 @@
         const stableAfter = await waitForStableMediaCount(
           protectedAtomicBlocks,
           beforeMediaCount + 1,
-          { timeoutMs: 45000, stableMs: 1400 },
+          { timeoutMs, stableMs: 1400 },
         );
         if (stableAfter.ok) return { ok: true, ...found };
       }
@@ -705,12 +735,20 @@
       const op = imageOps[index];
       draftNode = findDraftStateNode() || draftNode;
       progress(`正在上传图片 ${index + 1}/${imageOps.length}: ${op.marker}`);
-      let result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks);
+      let result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, {
+        index: index + 1,
+        total: imageOps.length,
+        attempt: 1,
+      });
       if (!result.ok && /timed out/i.test(result.error || "")) {
         progress(`图片 ${index + 1} 上传超时，正在重试...`, "warn");
-        await sleep(1400);
+        await sleep(retryDelayMs({ total: imageOps.length, attempt: 1 }));
         draftNode = findDraftStateNode() || draftNode;
-        result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks);
+        result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, {
+          index: index + 1,
+          total: imageOps.length,
+          attempt: 2,
+        });
       }
       if (result.ok) {
         summary.imgOk += 1;
@@ -794,5 +832,9 @@
   });
 
   window.__XAP_MAIN_VERSION = BRIDGE_VERSION;
+  window.__XAP_UPLOAD_POLICY = {
+    uploadTimeoutMs,
+    retryDelayMs,
+  };
   post("ready", { version: BRIDGE_VERSION });
 })();
