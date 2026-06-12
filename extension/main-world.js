@@ -291,6 +291,31 @@
     return count;
   }
 
+  function markerTexts(draftNode, markerPrefix) {
+    const markers = new Set();
+    if (!draftNode || !markerPrefix) return markers;
+    draftNode.props.editorState
+      .getCurrentContent()
+      .getBlockMap()
+      .forEach((block) => {
+        const text = (block.getText() || "").trim();
+        if (block.getType() !== "atomic" && text.startsWith(markerPrefix)) {
+          markers.add(text);
+        }
+      });
+    return markers;
+  }
+
+  function pendingImageOperations(imageOps = [], remainingMarkers = new Set()) {
+    const markerSet =
+      remainingMarkers instanceof Set ? remainingMarkers : new Set(remainingMarkers || []);
+    if (!markerSet.size) return { imageOps, resuming: false };
+    return {
+      imageOps: imageOps.filter((operation) => markerSet.has(operation.marker)),
+      resuming: true,
+    };
+  }
+
   async function waitForMarkers(markerPrefix, expectedCount, timeoutMs = 30000) {
     const deadline = Date.now() + timeoutMs;
     let latestNode = findDraftStateNode();
@@ -688,12 +713,22 @@
   }
 
   async function runFlow(payload) {
-    const imageOps = payload.images || [];
+    const allImageOps = payload.images || [];
+    let imageOps = allImageOps;
+    let resuming = false;
     let draftNode = findDraftStateNode();
-    const existingMarkers = countMarkerBlocks(draftNode, payload.markerPrefix);
+    const existingMarkerTexts = markerTexts(draftNode, payload.markerPrefix);
 
-    if (existingMarkers >= imageOps.length && imageOps.length > 0) {
-      progress("检测到正文 marker 已存在，直接继续上传图片...");
+    if (existingMarkerTexts.size > 0 && allImageOps.length > 0) {
+      const pending = pendingImageOperations(allImageOps, existingMarkerTexts);
+      if (!pending.imageOps.length) {
+        throw new Error(
+          `检测到页面已有 ${existingMarkerTexts.size} 个图片 marker，但与当前草稿不匹配。请清空当前 X 编辑器后重试。`,
+        );
+      }
+      imageOps = pending.imageOps;
+      resuming = pending.resuming;
+      progress(`检测到 ${imageOps.length} 个未处理 marker，继续上传剩余图片...`);
     } else {
       progress("正在通过 Draft.js 写入正文和图片 marker...");
       draftNode = await ensureDraftCharacterSample(draftNode);
@@ -729,7 +764,11 @@
       relocatedImages: 0,
       markerCleanupSkipped: false,
       imageErrors: [],
+      attemptedImages: imageOps.length,
+      totalImages: allImageOps.length,
+      resumed: resuming,
     };
+    const uploadPolicyTotal = Math.max(imageOps.length, allImageOps.length);
 
     for (let index = 0; index < imageOps.length; index += 1) {
       const op = imageOps[index];
@@ -737,16 +776,16 @@
       progress(`正在上传图片 ${index + 1}/${imageOps.length}: ${op.marker}`);
       let result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, {
         index: index + 1,
-        total: imageOps.length,
+        total: uploadPolicyTotal,
         attempt: 1,
       });
       if (!result.ok && /timed out/i.test(result.error || "")) {
         progress(`图片 ${index + 1} 上传超时，正在重试...`, "warn");
-        await sleep(retryDelayMs({ total: imageOps.length, attempt: 1 }));
+        await sleep(retryDelayMs({ total: uploadPolicyTotal, attempt: 1 }));
         draftNode = findDraftStateNode() || draftNode;
         result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, {
           index: index + 1,
-          total: imageOps.length,
+          total: uploadPolicyTotal,
           attempt: 2,
         });
       }
@@ -835,6 +874,7 @@
   window.__XAP_UPLOAD_POLICY = {
     uploadTimeoutMs,
     retryDelayMs,
+    pendingImageOperations,
   };
   post("ready", { version: BRIDGE_VERSION });
 })();

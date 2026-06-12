@@ -36,3 +36,21 @@ test("uses longer media upload timeout for large X Article batches", () => {
   assert.ok(policy.uploadTimeoutMs({ total: 25, index: 17, attempt: 2 }) > 90_000);
   assert.ok(policy.retryDelayMs({ total: 25, attempt: 1 }) >= 5_000);
 });
+
+test("resumes only image operations whose markers remain in the editor", () => {
+  const { policy } = loadMainWorldPolicy();
+  const imageOps = Array.from({ length: 5 }, (_value, index) => ({
+    marker: `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
+  }));
+
+  const result = policy.pendingImageOperations(
+    imageOps,
+    new Set(["[XAP-IMG-02]", "[XAP-IMG-05]"]),
+  );
+
+  assert.equal(result.resuming, true);
+  assert.deepEqual(
+    result.imageOps.map((image) => image.marker),
+    ["[XAP-IMG-02]", "[XAP-IMG-05]"],
+  );
+});
