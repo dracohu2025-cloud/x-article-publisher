@@ -1,7 +1,10 @@
 (function installXAPMainWorldBridge() {
   const CHANNEL_TO_MAIN = "xap";
   const CHANNEL_FROM_MAIN = "xap-main";
-  const BRIDGE_VERSION = "draft-block-write-v2";
+  const BRIDGE_VERSION = "draft-block-write-v3";
+  const BRIDGE_CAPABILITIES = Object.freeze({
+    resumeMarkers: true,
+  });
   const EDITOR_SELECTOR =
     "[data-contents='true'] [contenteditable='true'], [contenteditable='true'][role='textbox'], [contenteditable='true'].public-DraftEditor-content, [contenteditable='true']";
   const BASE_MEDIA_UPLOAD_TIMEOUT_MS = 45_000;
@@ -860,7 +863,7 @@
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.data?.source !== CHANNEL_TO_MAIN) return;
     if (event.data.kind === "ready?") {
-      post("ready");
+      post("ready", { version: BRIDGE_VERSION, capabilities: BRIDGE_CAPABILITIES });
       return;
     }
     if (event.data.kind === "run") {
@@ -876,5 +879,5 @@
     retryDelayMs,
     pendingImageOperations,
   };
-  post("ready", { version: BRIDGE_VERSION });
+  post("ready", { version: BRIDGE_VERSION, capabilities: BRIDGE_CAPABILITIES });
 })();

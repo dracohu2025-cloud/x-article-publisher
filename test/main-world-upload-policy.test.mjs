@@ -54,3 +54,12 @@ test("resumes only image operations whose markers remain in the editor", () => {
     ["[XAP-IMG-02]", "[XAP-IMG-05]"],
   );
 });
+
+test("announces resume capability in ready messages", () => {
+  const { messages } = loadMainWorldPolicy();
+  const ready = messages.find((message) => message.kind === "ready");
+
+  assert.ok(ready);
+  assert.match(ready.version, /^draft-block-write-/);
+  assert.equal(ready.capabilities?.resumeMarkers, true);
+});

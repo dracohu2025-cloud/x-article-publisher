@@ -3,6 +3,7 @@ const XAP_CONTENT_VERSION = "context-safe-storage-v2";
 const X_ARTICLE_MAX_IMAGES = 25;
 const FEISHU_MEDIA_TIMEOUT_MS = 15_000;
 const FEISHU_MEDIA_MAX_ATTEMPTS = 3;
+const MAIN_BRIDGE_READY_TIMEOUT_MS = 1500;
 
 const state = {
   draft: null,
@@ -488,6 +489,10 @@ function extensionReloadMessage() {
     globalThis.XAPExtensionContext?.extensionReloadMessage?.() ||
     "插件刚重新加载，当前页面还在使用旧脚本。请刷新 X Articles 页面后点击“刷新草稿”。"
   );
+}
+
+function hasRequiredMainBridgeCapabilities(message) {
+  return Boolean(message?.capabilities?.resumeMarkers);
 }
 
 async function readLocalStorage(keys) {
@@ -1066,6 +1071,28 @@ function runMainImport(payload, fileMap) {
   });
 }
 
+function ensureMainBridgeReady() {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      window.removeEventListener("message", listener);
+      reject(new Error(extensionReloadMessage()));
+    }, MAIN_BRIDGE_READY_TIMEOUT_MS);
+
+    const listener = (event) => {
+      if (event.source !== window || event.data?.source !== "xap-main") return;
+      const message = event.data;
+      if (message.kind !== "ready") return;
+      if (!hasRequiredMainBridgeCapabilities(message)) return;
+      clearTimeout(timeout);
+      window.removeEventListener("message", listener);
+      resolve(message);
+    };
+
+    window.addEventListener("message", listener);
+    window.postMessage({ source: "xap", kind: "ready?" }, "*");
+  });
+}
+
 async function importBodyAndImages() {
   if (!state.draft) {
     setStatus("没有草稿，请先粘贴飞书链接并生成草稿。");
@@ -1087,6 +1114,7 @@ async function importBodyAndImages() {
       skippedParts.push(`超限跳过 ${payload.imageLimit.limitSkippedCount} 张`);
     }
     const skipText = skippedParts.length ? `，${skippedParts.join("，")}` : "";
+    await ensureMainBridgeReady();
     setStatus(`图片准备完成，正在导入正文和 ${payload.images.length} 张正文图${skipText}...`);
     const summary = await runMainImport(payload, fileMap);
     const attemptedImages = summary.attemptedImages || payload.images.length;
