@@ -1,9 +1,10 @@
 (function installXAPMainWorldBridge() {
   const CHANNEL_TO_MAIN = "xap";
   const CHANNEL_FROM_MAIN = "xap-main";
-  const BRIDGE_VERSION = "draft-block-write-v3";
+  const BRIDGE_VERSION = "draft-block-write-v4";
   const BRIDGE_CAPABILITIES = Object.freeze({
     resumeMarkers: true,
+    batchedUploads: true,
   });
   const EDITOR_SELECTOR =
     "[data-contents='true'] [contenteditable='true'], [contenteditable='true'][role='textbox'], [contenteditable='true'].public-DraftEditor-content, [contenteditable='true']";
@@ -12,6 +13,8 @@
   const RETRY_MEDIA_UPLOAD_TIMEOUT_MS = 120_000;
   const MAX_MEDIA_UPLOAD_TIMEOUT_MS = 150_000;
   const LARGE_BATCH_SIZE = 16;
+  const MEDIA_UPLOAD_BATCH_SIZE = 5;
+  const MAX_MARKER_UPLOAD_ATTEMPTS = 3;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -319,6 +322,34 @@
     };
   }
 
+  function imageUploadBatches(imageOps = [], batchSize = MEDIA_UPLOAD_BATCH_SIZE) {
+    const size = Math.max(1, Number(batchSize) || MEDIA_UPLOAD_BATCH_SIZE);
+    const batches = [];
+    for (let index = 0; index < imageOps.length; index += size) {
+      batches.push(imageOps.slice(index, index + size));
+    }
+    return batches;
+  }
+
+  function nextPendingImageBatch(
+    imageOps = [],
+    remainingMarkers = new Set(),
+    attempts = new Map(),
+    { batchSize = MEDIA_UPLOAD_BATCH_SIZE, maxAttempts = MAX_MARKER_UPLOAD_ATTEMPTS } = {},
+  ) {
+    const pending = pendingImageOperations(imageOps, remainingMarkers).imageOps;
+    const resumable = pending.filter((operation) => {
+      const count = attempts.get(operation.marker) || 0;
+      return count < maxAttempts;
+    });
+    const [batch = []] = imageUploadBatches(resumable, batchSize);
+    return {
+      imageOps: batch,
+      pendingCount: resumable.length,
+      exhaustedCount: pending.length - resumable.length,
+    };
+  }
+
   async function waitForMarkers(markerPrefix, expectedCount, timeoutMs = 30000) {
     const deadline = Date.now() + timeoutMs;
     let latestNode = findDraftStateNode();
@@ -433,6 +464,15 @@
       details.push({ blockKey, entityKey: firstEntity });
     });
     return details;
+  }
+
+  function protectExistingMediaBlocks(draftNode, protectedAtomicBlocks = new Set()) {
+    if (!draftNode) return protectedAtomicBlocks;
+    const contentState = draftNode.props.editorState.getCurrentContent();
+    contentState.getBlockMap().forEach((block, blockKey) => {
+      if (isMediaBlock(contentState, block)) protectedAtomicBlocks.add(blockKey);
+    });
+    return protectedAtomicBlocks;
   }
 
   async function waitForStableMediaCount(
@@ -715,6 +755,57 @@
     return { removed };
   }
 
+  async function settleUploadedBatch(
+    draftNode,
+    uploads,
+    protectedAtomicBlocks,
+    markerPrefix,
+    markersBeforeCount,
+    summary,
+  ) {
+    if (!uploads.length) return draftNode;
+
+    const stableUploads = await waitForStableMediaCount(
+      protectedAtomicBlocks,
+      uploads.length,
+      { timeoutMs: 60000, stableMs: 2200 },
+    );
+    draftNode = stableUploads.draftNode || draftNode;
+    summary.stableMediaCount = stableUploads.count;
+    if (!stableUploads.ok) {
+      progress(`图片仍在处理：当前稳定媒体块 ${stableUploads.count}/${uploads.length}`, "warn");
+    }
+
+    progress(`正在把本批 ${uploads.length} 张图片移动到 marker 位置...`);
+    await sleep(1200);
+    draftNode = findDraftStateNode() || draftNode;
+    const result = relocateImages(draftNode, uploads, protectedAtomicBlocks);
+    summary.relocatedImages += result.moved;
+    summary.relocationMissing += result.missing || 0;
+    summary.mediaBlocksSeen = result.mediaBlocks;
+    progress(`本批图片重排完成：移动 ${result.moved}/${uploads.length}，缺失 ${result.missing || 0}`);
+
+    await sleep(500);
+    draftNode = findDraftStateNode() || draftNode;
+    const cleanup = removeUploadedMarkerBlocks(draftNode, uploads);
+    summary.removedMarkers += cleanup.removed;
+    if (cleanup.removed > 0) {
+      progress(`已清理本批 ${cleanup.removed}/${uploads.length} 个图片 marker。`);
+    }
+
+    const confirmation = await waitForMarkerCountAtMost(
+      markerPrefix,
+      Math.max(0, markersBeforeCount - uploads.length),
+      12000,
+      2500,
+    );
+    summary.relocationConfirmed = summary.relocationConfirmed && confirmation.ok;
+    summary.markerCountAfterRelocation = confirmation.count;
+    draftNode = confirmation.draftNode || findDraftStateNode() || draftNode;
+    protectExistingMediaBlocks(draftNode, protectedAtomicBlocks);
+    return draftNode;
+  }
+
   async function runFlow(payload) {
     const allImageOps = payload.images || [];
     let imageOps = allImageOps;
@@ -753,7 +844,6 @@
       );
     }
 
-    const uploads = [];
     const protectedAtomicBlocks = new Set();
     draftNode.props.editorState
       .getCurrentContent()
@@ -761,99 +851,98 @@
       .forEach((block, key) => {
         if (block.getType() === "atomic") protectedAtomicBlocks.add(key);
       });
+    protectExistingMediaBlocks(draftNode, protectedAtomicBlocks);
     const summary = {
       imgOk: 0,
       imgFail: 0,
       relocatedImages: 0,
+      relocationMissing: 0,
+      removedMarkers: 0,
+      relocationConfirmed: true,
       markerCleanupSkipped: false,
       imageErrors: [],
       attemptedImages: imageOps.length,
       totalImages: allImageOps.length,
       resumed: resuming,
+      batches: 0,
+      batchSize: MEDIA_UPLOAD_BATCH_SIZE,
+      exhaustedImages: 0,
     };
     const uploadPolicyTotal = Math.max(imageOps.length, allImageOps.length);
+    const attempts = new Map();
+    const uploadErrors = new Map();
 
-    for (let index = 0; index < imageOps.length; index += 1) {
-      const op = imageOps[index];
+    while (true) {
       draftNode = findDraftStateNode() || draftNode;
-      progress(`正在上传图片 ${index + 1}/${imageOps.length}: ${op.marker}`);
-      let result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, {
-        index: index + 1,
-        total: uploadPolicyTotal,
-        attempt: 1,
-      });
-      if (!result.ok && /timed out/i.test(result.error || "")) {
-        progress(`图片 ${index + 1} 上传超时，正在重试...`, "warn");
-        await sleep(retryDelayMs({ total: uploadPolicyTotal, attempt: 1 }));
+      const remainingMarkerTexts = markerTexts(draftNode, payload.markerPrefix);
+      const nextBatch = nextPendingImageBatch(imageOps, remainingMarkerTexts, attempts);
+      summary.exhaustedImages = nextBatch.exhaustedCount;
+      if (!nextBatch.imageOps.length) break;
+
+      summary.batches += 1;
+      const batchUploads = [];
+      const markersBeforeCount = remainingMarkerTexts.size;
+      progress(
+        `小批量上传第 ${summary.batches} 批：${nextBatch.imageOps.length} 张，当前剩余 ${nextBatch.pendingCount} 张...`,
+      );
+
+      for (let batchIndex = 0; batchIndex < nextBatch.imageOps.length; batchIndex += 1) {
+        const op = nextBatch.imageOps[batchIndex];
+        const attempt = (attempts.get(op.marker) || 0) + 1;
+        attempts.set(op.marker, attempt);
+        const absoluteIndex = Math.max(1, imageOps.findIndex((image) => image.marker === op.marker) + 1);
         draftNode = findDraftStateNode() || draftNode;
-        result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, {
-          index: index + 1,
+        progress(
+          `正在上传第 ${summary.batches} 批 ${batchIndex + 1}/${nextBatch.imageOps.length}（第 ${attempt}/${MAX_MARKER_UPLOAD_ATTEMPTS} 次）: ${op.marker}`,
+        );
+        const result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, {
+          index: absoluteIndex,
           total: uploadPolicyTotal,
-          attempt: 2,
+          attempt,
         });
-      }
-      if (result.ok) {
-        summary.imgOk += 1;
-        uploads.push({
-          marker: op.marker,
-          blockKey: result.blockKey,
-          entityKey: result.entityKey,
-        });
-      } else {
-        summary.imgFail += 1;
-        summary.imageErrors.push({
-          marker: op.marker,
-          error: result.error || "Image upload failed",
-        });
-      }
-    }
 
-    if (uploads.length) {
-      const stableUploads = await waitForStableMediaCount(
+        if (result.ok) {
+          batchUploads.push({
+            marker: op.marker,
+            blockKey: result.blockKey,
+            entityKey: result.entityKey,
+          });
+          uploadErrors.delete(op.marker);
+        } else {
+          uploadErrors.set(op.marker, result.error || "Image upload failed");
+        }
+      }
+
+      draftNode = await settleUploadedBatch(
+        draftNode,
+        batchUploads,
         protectedAtomicBlocks,
-        uploads.length,
-        { timeoutMs: 60000, stableMs: 2200 },
-      );
-      draftNode = stableUploads.draftNode || draftNode;
-      summary.stableMediaCount = stableUploads.count;
-      if (!stableUploads.ok) {
-        progress(`图片仍在处理：当前稳定媒体块 ${stableUploads.count}/${uploads.length}`, "warn");
-      }
-      progress("正在把上传后的图片移动到 marker 位置...");
-      await sleep(1600);
-      draftNode = findDraftStateNode() || draftNode;
-      const result = relocateImages(draftNode, uploads, protectedAtomicBlocks);
-      summary.relocatedImages = result.moved;
-      summary.relocationMissing = result.missing;
-      summary.mediaBlocksSeen = result.mediaBlocks;
-      progress(`图片重排完成：移动 ${result.moved}/${uploads.length}，缺失 ${result.missing || 0}`);
-      await sleep(500);
-      draftNode = findDraftStateNode() || draftNode;
-      const cleanup = removeUploadedMarkerBlocks(draftNode, uploads);
-      summary.removedMarkers = cleanup.removed;
-      if (cleanup.removed > 0) {
-        progress(`已清理 ${cleanup.removed}/${uploads.length} 个图片 marker。`);
-      }
-      const confirmation = await waitForMarkerCountAtMost(
         payload.markerPrefix,
-        Math.max(0, imageOps.length - uploads.length),
-        15000,
-        3500,
+        markersBeforeCount,
+        summary,
       );
-      summary.relocationConfirmed = confirmation.ok;
-      summary.markerCountAfterRelocation = confirmation.count;
-      draftNode = confirmation.draftNode || findDraftStateNode() || draftNode;
+      if (!batchUploads.length) {
+        await sleep(retryDelayMs({ total: uploadPolicyTotal, attempt: 1 }));
+      }
     }
 
     draftNode = findDraftStateNode() || draftNode;
-    const markerCount = countMarkerBlocks(draftNode, payload.markerPrefix);
+    const finalMarkerTexts = markerTexts(draftNode, payload.markerPrefix);
+    const finalPending = pendingImageOperations(imageOps, finalMarkerTexts).imageOps;
+    const markerCount = finalPending.length;
+    summary.imgOk = Math.max(0, imageOps.length - finalPending.length);
+    summary.imgFail = finalPending.length;
+    summary.imageErrors = finalPending.map((operation) => ({
+      marker: operation.marker,
+      error: uploadErrors.get(operation.marker) || "Image marker was not cleared after upload",
+    }));
     if (markerCount === 0) {
       progress("图片 marker 已处理完成。");
     } else {
       summary.markerCleanupSkipped = true;
       summary.markerCountBeforeSkippedCleanup = markerCount;
       progress(
-        `跳过 marker 清理：重排状态未确认，当前仍有 ${markerCount} 个 marker。请保留页面并反馈这个数字。`,
+        `仍有 ${markerCount} 个 marker 未处理完成，已保留用于下次续传。请保留页面并反馈这个数字。`,
         "warn",
       );
     }
@@ -878,6 +967,8 @@
     uploadTimeoutMs,
     retryDelayMs,
     pendingImageOperations,
+    imageUploadBatches,
+    nextPendingImageBatch,
   };
   post("ready", { version: BRIDGE_VERSION, capabilities: BRIDGE_CAPABILITIES });
 })();

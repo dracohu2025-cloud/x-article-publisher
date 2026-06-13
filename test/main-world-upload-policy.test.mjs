@@ -62,4 +62,39 @@ test("announces resume capability in ready messages", () => {
   assert.ok(ready);
   assert.match(ready.version, /^draft-block-write-/);
   assert.equal(ready.capabilities?.resumeMarkers, true);
+  assert.equal(ready.capabilities?.batchedUploads, true);
+});
+
+test("splits large image imports into small upload batches", () => {
+  const { policy } = loadMainWorldPolicy();
+  const imageOps = Array.from({ length: 12 }, (_value, index) => ({
+    marker: `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
+  }));
+  const batchSizes = policy.imageUploadBatches(imageOps).map((batch) => batch.length);
+
+  assert.equal(JSON.stringify(batchSizes), JSON.stringify([5, 5, 2]));
+});
+
+test("selects the next resumable image batch from remaining markers", () => {
+  const { policy } = loadMainWorldPolicy();
+  const imageOps = Array.from({ length: 6 }, (_value, index) => ({
+    marker: `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
+  }));
+  const attempts = new Map([
+    ["[XAP-IMG-02]", 3],
+  ]);
+
+  const result = policy.nextPendingImageBatch(
+    imageOps,
+    new Set(["[XAP-IMG-01]", "[XAP-IMG-02]", "[XAP-IMG-03]", "[XAP-IMG-04]"]),
+    attempts,
+    { batchSize: 2, maxAttempts: 3 },
+  );
+
+  assert.deepEqual(
+    result.imageOps.map((image) => image.marker),
+    ["[XAP-IMG-01]", "[XAP-IMG-03]"],
+  );
+  assert.equal(result.pendingCount, 3);
+  assert.equal(result.exhaustedCount, 1);
 });

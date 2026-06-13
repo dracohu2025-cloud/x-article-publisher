@@ -492,7 +492,7 @@ function extensionReloadMessage() {
 }
 
 function hasRequiredMainBridgeCapabilities(message) {
-  return Boolean(message?.capabilities?.resumeMarkers);
+  return Boolean(message?.capabilities?.resumeMarkers && message?.capabilities?.batchedUploads);
 }
 
 async function readLocalStorage(keys) {
