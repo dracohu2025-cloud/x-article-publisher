@@ -1118,9 +1118,12 @@ async function importBodyAndImages() {
     setStatus(`图片准备完成，正在导入正文和 ${payload.images.length} 张正文图${skipText}...`);
     const summary = await runMainImport(payload, fileMap);
     const attemptedImages = summary.attemptedImages || payload.images.length;
-    const cleanupText = summary.markerCleanupSkipped
-      ? `重排未确认，保留 ${summary.markerCountBeforeSkippedCleanup || 0} 个 marker`
-      : "marker 已处理";
+    const cleanupText =
+      summary.markerCleanupPending > 0
+        ? `marker 清理未确认，保留 ${summary.markerCleanupPending} 个已上传 marker`
+        : summary.markerCleanupSkipped
+          ? `保留 ${summary.markerCountBeforeSkippedCleanup || 0} 个 marker`
+          : "marker 已处理";
     const failText =
       summary.imgFail > 0 ? `，失败 ${summary.imgFail} 张，先不要发布` : "";
     const resultPrefix =
@@ -1128,11 +1131,18 @@ async function importBodyAndImages() {
         ? summary.resumed
           ? "续传未完整完成"
           : "自动导入未完整完成"
+        : summary.markerCleanupPending > 0
+          ? "自动导入需检查"
         : summary.resumed
           ? "续传完成"
           : "自动导入完成";
     let localCleanupText = "";
-    if ((summary.imgFail || 0) === 0 && (payload.imageLimit?.skippedCount || 0) === 0) {
+    if (
+      (summary.imgFail || 0) === 0 &&
+      (summary.markerCleanupPending || 0) === 0 &&
+      !summary.markerCleanupSkipped &&
+      (payload.imageLimit?.skippedCount || 0) === 0
+    ) {
       try {
         const marked = await markDraftImported(summary);
         localCleanupText = marked ? "；本地图片将在 24 小时后自动清理" : "";

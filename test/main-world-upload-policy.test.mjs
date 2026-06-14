@@ -98,3 +98,23 @@ test("selects the next resumable image batch from remaining markers", () => {
   assert.equal(result.pendingCount, 3);
   assert.equal(result.exhaustedCount, 1);
 });
+
+test("does not count uploaded images with uncleared markers as upload failures", () => {
+  const { policy } = loadMainWorldPolicy();
+  const imageOps = Array.from({ length: 3 }, (_value, index) => ({
+    marker: `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
+  }));
+
+  const result = policy.summarizeImageImport(
+    imageOps,
+    new Set(["[XAP-IMG-01]", "[XAP-IMG-02]", "[XAP-IMG-03]"]),
+    new Set(["[XAP-IMG-01]", "[XAP-IMG-02]", "[XAP-IMG-03]"]),
+    new Map(),
+  );
+
+  assert.equal(result.imgOk, 3);
+  assert.equal(result.imgFail, 0);
+  assert.equal(result.markerCleanupPending, 3);
+  assert.equal(result.markerCount, 3);
+  assert.deepEqual(result.imageErrors, []);
+});

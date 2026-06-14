@@ -350,6 +350,27 @@
     };
   }
 
+  function summarizeImageImport(
+    imageOps = [],
+    finalMarkerTexts = new Set(),
+    uploadedMarkers = new Set(),
+    uploadErrors = new Map(),
+  ) {
+    const finalPending = pendingImageOperations(imageOps, finalMarkerTexts).imageOps;
+    const failed = finalPending.filter((operation) => !uploadedMarkers.has(operation.marker));
+    const markerCleanupPending = finalPending.length - failed.length;
+    return {
+      imgOk: uploadedMarkers.size,
+      imgFail: failed.length,
+      markerCleanupPending,
+      markerCount: finalPending.length,
+      imageErrors: failed.map((operation) => ({
+        marker: operation.marker,
+        error: uploadErrors.get(operation.marker) || "Image upload failed",
+      })),
+    };
+  }
+
   async function waitForMarkers(markerPrefix, expectedCount, timeoutMs = 30000) {
     const deadline = Date.now() + timeoutMs;
     let latestNode = findDraftStateNode();
@@ -871,6 +892,7 @@
     const uploadPolicyTotal = Math.max(imageOps.length, allImageOps.length);
     const attempts = new Map();
     const uploadErrors = new Map();
+    const uploadedMarkers = new Set();
 
     while (true) {
       draftNode = findDraftStateNode() || draftNode;
@@ -902,6 +924,7 @@
         });
 
         if (result.ok) {
+          uploadedMarkers.add(op.marker);
           batchUploads.push({
             marker: op.marker,
             blockKey: result.blockKey,
@@ -927,22 +950,30 @@
     }
 
     draftNode = findDraftStateNode() || draftNode;
+    if (uploadedMarkers.size) {
+      const finalCleanup = await waitForMarkerCountAtMost(payload.markerPrefix, 0, 18000, 3000);
+      draftNode = finalCleanup.draftNode || draftNode;
+      summary.relocationConfirmed = summary.relocationConfirmed && finalCleanup.ok;
+      summary.markerCountAfterRelocation = finalCleanup.count;
+    }
     const finalMarkerTexts = markerTexts(draftNode, payload.markerPrefix);
-    const finalPending = pendingImageOperations(imageOps, finalMarkerTexts).imageOps;
-    const markerCount = finalPending.length;
-    summary.imgOk = Math.max(0, imageOps.length - finalPending.length);
-    summary.imgFail = finalPending.length;
-    summary.imageErrors = finalPending.map((operation) => ({
-      marker: operation.marker,
-      error: uploadErrors.get(operation.marker) || "Image marker was not cleared after upload",
-    }));
+    const importSummary = summarizeImageImport(
+      imageOps,
+      finalMarkerTexts,
+      uploadedMarkers,
+      uploadErrors,
+    );
+    Object.assign(summary, importSummary);
+    const markerCount = importSummary.markerCount;
     if (markerCount === 0) {
       progress("图片 marker 已处理完成。");
     } else {
       summary.markerCleanupSkipped = true;
       summary.markerCountBeforeSkippedCleanup = markerCount;
       progress(
-        `仍有 ${markerCount} 个 marker 未处理完成，已保留用于下次续传。请保留页面并反馈这个数字。`,
+        importSummary.markerCleanupPending > 0
+          ? `仍有 ${importSummary.markerCleanupPending} 个已上传图片 marker 清理未确认。请检查正文里是否还残留 marker。`
+          : `仍有 ${markerCount} 个 marker 未处理完成，已保留用于下次续传。请保留页面并反馈这个数字。`,
         "warn",
       );
     }
@@ -969,6 +1000,7 @@
     pendingImageOperations,
     imageUploadBatches,
     nextPendingImageBatch,
+    summarizeImageImport,
   };
   post("ready", { version: BRIDGE_VERSION, capabilities: BRIDGE_CAPABILITIES });
 })();
