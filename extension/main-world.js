@@ -1,10 +1,11 @@
 (function installXAPMainWorldBridge() {
   const CHANNEL_TO_MAIN = "xap";
   const CHANNEL_FROM_MAIN = "xap-main";
-  const BRIDGE_VERSION = "draft-block-write-v4";
+  const BRIDGE_VERSION = "draft-block-write-v5";
   const BRIDGE_CAPABILITIES = Object.freeze({
     resumeMarkers: true,
     batchedUploads: true,
+    avoidDuplicateUploadedMarkers: true,
   });
   const EDITOR_SELECTOR =
     "[data-contents='true'] [contenteditable='true'], [contenteditable='true'][role='textbox'], [contenteditable='true'].public-DraftEditor-content, [contenteditable='true']";
@@ -335,10 +336,17 @@
     imageOps = [],
     remainingMarkers = new Set(),
     attempts = new Map(),
-    { batchSize = MEDIA_UPLOAD_BATCH_SIZE, maxAttempts = MAX_MARKER_UPLOAD_ATTEMPTS } = {},
+    {
+      batchSize = MEDIA_UPLOAD_BATCH_SIZE,
+      maxAttempts = MAX_MARKER_UPLOAD_ATTEMPTS,
+      uploadedMarkers = new Set(),
+    } = {},
   ) {
     const pending = pendingImageOperations(imageOps, remainingMarkers).imageOps;
-    const resumable = pending.filter((operation) => {
+    const uploadedSet =
+      uploadedMarkers instanceof Set ? uploadedMarkers : new Set(uploadedMarkers || []);
+    const uploadable = pending.filter((operation) => !uploadedSet.has(operation.marker));
+    const resumable = uploadable.filter((operation) => {
       const count = attempts.get(operation.marker) || 0;
       return count < maxAttempts;
     });
@@ -346,7 +354,8 @@
     return {
       imageOps: batch,
       pendingCount: resumable.length,
-      exhaustedCount: pending.length - resumable.length,
+      exhaustedCount: uploadable.length - resumable.length,
+      uploadedPendingCount: pending.length - uploadable.length,
     };
   }
 
@@ -888,6 +897,7 @@
       batches: 0,
       batchSize: MEDIA_UPLOAD_BATCH_SIZE,
       exhaustedImages: 0,
+      uploadedPendingMarkers: 0,
     };
     const uploadPolicyTotal = Math.max(imageOps.length, allImageOps.length);
     const attempts = new Map();
@@ -897,8 +907,11 @@
     while (true) {
       draftNode = findDraftStateNode() || draftNode;
       const remainingMarkerTexts = markerTexts(draftNode, payload.markerPrefix);
-      const nextBatch = nextPendingImageBatch(imageOps, remainingMarkerTexts, attempts);
+      const nextBatch = nextPendingImageBatch(imageOps, remainingMarkerTexts, attempts, {
+        uploadedMarkers,
+      });
       summary.exhaustedImages = nextBatch.exhaustedCount;
+      summary.uploadedPendingMarkers = nextBatch.uploadedPendingCount;
       if (!nextBatch.imageOps.length) break;
 
       summary.batches += 1;

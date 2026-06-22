@@ -63,6 +63,7 @@ test("announces resume capability in ready messages", () => {
   assert.match(ready.version, /^draft-block-write-/);
   assert.equal(ready.capabilities?.resumeMarkers, true);
   assert.equal(ready.capabilities?.batchedUploads, true);
+  assert.equal(ready.capabilities?.avoidDuplicateUploadedMarkers, true);
 });
 
 test("splits large image imports into small upload batches", () => {
@@ -97,6 +98,32 @@ test("selects the next resumable image batch from remaining markers", () => {
   );
   assert.equal(result.pendingCount, 3);
   assert.equal(result.exhaustedCount, 1);
+});
+
+test("does not reselect uploaded markers that still remain in the editor", () => {
+  const { policy } = loadMainWorldPolicy();
+  const imageOps = Array.from({ length: 4 }, (_value, index) => ({
+    marker: `[XAP-IMG-${String(index + 1).padStart(2, "0")}]`,
+  }));
+
+  const result = policy.nextPendingImageBatch(
+    imageOps,
+    new Set(["[XAP-IMG-01]", "[XAP-IMG-02]", "[XAP-IMG-03]", "[XAP-IMG-04]"]),
+    new Map(),
+    {
+      batchSize: 3,
+      maxAttempts: 3,
+      uploadedMarkers: new Set(["[XAP-IMG-01]", "[XAP-IMG-02]"]),
+    },
+  );
+
+  assert.deepEqual(
+    result.imageOps.map((image) => image.marker),
+    ["[XAP-IMG-03]", "[XAP-IMG-04]"],
+  );
+  assert.equal(result.pendingCount, 2);
+  assert.equal(result.exhaustedCount, 0);
+  assert.equal(result.uploadedPendingCount, 2);
 });
 
 test("does not count uploaded images with uncleared markers as upload failures", () => {
