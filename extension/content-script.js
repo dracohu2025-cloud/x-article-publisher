@@ -1,5 +1,5 @@
 const helperBase = "http://127.0.0.1:49231";
-const XAP_CONTENT_VERSION = "context-safe-storage-v5";
+const XAP_CONTENT_VERSION = "context-safe-storage-v6";
 const X_ARTICLE_MAX_IMAGES = 25;
 const FEISHU_MEDIA_TIMEOUT_MS = 15_000;
 const FEISHU_MEDIA_MAX_ATTEMPTS = 3;
@@ -219,19 +219,19 @@ function injectStyles() {
   style.id = "xap-style";
   style.textContent = `
     #xap-panel {
-      --xap-text: #101418;
-      --xap-muted: #667584;
-      --xap-subtle: #8b98a5;
-      --xap-line: #d7e0e7;
-      --xap-line-strong: #c5d0da;
-      --xap-surface: #ffffff;
-      --xap-surface-soft: #f5f8fa;
-      --xap-surface-raised: #fbfcfd;
-      --xap-primary: #1687d9;
-      --xap-primary-strong: #0f6fb7;
-      --xap-success: #138a5b;
-      --xap-warning: #a15f00;
-      --xap-danger: #b3261e;
+      --xap-text: #202724;
+      --xap-muted: #68746d;
+      --xap-subtle: #8d958c;
+      --xap-line: #d7d2c6;
+      --xap-line-strong: #c5bcae;
+      --xap-surface: #f8f6f0;
+      --xap-surface-soft: #ede9df;
+      --xap-surface-raised: #fffdf8;
+      --xap-primary: #2f6f73;
+      --xap-primary-strong: #24585c;
+      --xap-success: #5f8b68;
+      --xap-warning: #a47838;
+      --xap-danger: #a85d4f;
       position: fixed;
       right: 16px;
       bottom: 16px;
@@ -241,12 +241,15 @@ function injectStyles() {
       max-height: calc(100vh - 48px);
       overflow: hidden;
       color: var(--xap-text);
-      background: var(--xap-surface);
+      background:
+        radial-gradient(circle at 14% -8%, rgba(183, 196, 177, 0.32), transparent 34%),
+        linear-gradient(180deg, #f6f2ea 0%, #f8f6f0 72%),
+        var(--xap-surface);
       border: 1px solid var(--xap-line);
       border-radius: 8px;
       box-shadow:
-        0 24px 60px rgba(15, 23, 42, 0.18),
-        0 4px 14px rgba(15, 23, 42, 0.08);
+        0 24px 60px rgba(69, 74, 62, 0.19),
+        0 4px 14px rgba(69, 74, 62, 0.09);
       font: 13px/1.48 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
         sans-serif;
       letter-spacing: 0;
@@ -270,8 +273,10 @@ function injectStyles() {
       justify-content: space-between;
       gap: 12px;
       padding: 13px 14px;
-      border-bottom: 1px solid #edf2f5;
-      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      border-bottom: 1px solid rgba(199, 193, 181, 0.72);
+      background:
+        linear-gradient(135deg, rgba(255, 253, 248, 0.95), rgba(237, 233, 223, 0.82)),
+        var(--xap-surface-raised);
     }
 
     .xap-brand {
@@ -290,8 +295,12 @@ function injectStyles() {
       border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 8px;
       color: #ffffff;
-      background: #121820;
-      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+      background:
+        linear-gradient(135deg, #203733, #111d20 72%),
+        #172420;
+      box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+        0 8px 18px rgba(46, 61, 53, 0.16);
       font-size: 14px;
       font-weight: 780;
     }
@@ -327,7 +336,7 @@ function injectStyles() {
       overflow: auto;
       padding: 14px;
       background:
-        linear-gradient(180deg, rgba(248, 250, 252, 0.72) 0%, rgba(255, 255, 255, 0) 44px),
+        linear-gradient(180deg, rgba(237, 233, 223, 0.72) 0%, rgba(248, 246, 240, 0) 44px),
         var(--xap-surface);
     }
 
@@ -351,7 +360,7 @@ function injectStyles() {
       border-radius: 8px;
       padding: 10px 11px;
       color: var(--xap-text);
-      background: #ffffff;
+      background: #fffdf8;
       font: inherit;
       line-height: 1.45;
       outline: none;
@@ -362,9 +371,9 @@ function injectStyles() {
     }
 
     #xap-doc-url:focus {
-      border-color: rgba(22, 135, 217, 0.68);
-      box-shadow: 0 0 0 3px rgba(22, 135, 217, 0.12);
-      background: #ffffff;
+      border-color: rgba(47, 111, 115, 0.72);
+      box-shadow: 0 0 0 3px rgba(47, 111, 115, 0.13);
+      background: #fffdf8;
     }
 
     #xap-doc-url:disabled {
@@ -396,7 +405,7 @@ function injectStyles() {
       border-radius: 8px;
       padding: 11px;
       background: var(--xap-surface-raised);
-      box-shadow: 0 8px 22px rgba(31, 45, 61, 0.07);
+      box-shadow: 0 10px 24px rgba(69, 74, 62, 0.09);
     }
 
     .xap-counter {
@@ -456,8 +465,8 @@ function injectStyles() {
 
     #xap-panel button:hover:not(:disabled) {
       border-color: var(--xap-line-strong);
-      background: #eef3f6;
-      box-shadow: 0 6px 16px rgba(31, 45, 61, 0.12);
+      background: #e5e0d4;
+      box-shadow: 0 7px 18px rgba(69, 74, 62, 0.13);
       transform: translateY(-1px);
     }
 
@@ -468,7 +477,7 @@ function injectStyles() {
     #xap-panel button.xap-primary {
       color: #fff;
       border-color: var(--xap-primary);
-      background: var(--xap-primary);
+      background: linear-gradient(135deg, #347a7e, var(--xap-primary));
     }
 
     #xap-panel button.xap-primary:hover:not(:disabled) {
@@ -485,11 +494,11 @@ function injectStyles() {
       background:
         linear-gradient(
           90deg,
-          #0f7f56 0%,
-          #13a366 42%,
-          #6fd087 var(--xap-progress),
-          #8dc3ee var(--xap-progress),
-          #8dc3ee 100%
+          #3f765d 0%,
+          #5f9a73 44%,
+          #a4c6a0 var(--xap-progress),
+          #b9c8c2 var(--xap-progress),
+          #b9c8c2 100%
         );
       box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
     }
@@ -519,9 +528,9 @@ function injectStyles() {
 
     #xap-panel button[data-progress="true"][data-indeterminate="true"] {
       background:
-        linear-gradient(90deg, rgba(15, 127, 86, 0.95), rgba(19, 163, 102, 0.95))
+        linear-gradient(90deg, rgba(63, 118, 93, 0.96), rgba(95, 154, 115, 0.96))
           0 0 / 42% 100% no-repeat,
-        #8dc3ee;
+        #b9c8c2;
       animation: xap-progress-slide 1.1s ease-in-out infinite;
     }
 
@@ -547,13 +556,13 @@ function injectStyles() {
 
     #xap-panel button.xap-danger {
       color: var(--xap-danger);
-      border-color: rgba(179, 38, 30, 0.22);
-      background: rgba(179, 38, 30, 0.06);
+      border-color: rgba(168, 93, 79, 0.25);
+      background: rgba(168, 93, 79, 0.08);
     }
 
     #xap-panel button.xap-ghost {
       min-width: 58px;
-      background: #ffffff;
+      background: #fffdf8;
     }
 
     #xap-panel button:disabled {
@@ -615,17 +624,17 @@ function injectStyles() {
       height: 8px;
       border-radius: 50%;
       background: var(--xap-success);
-      box-shadow: 0 0 0 3px rgba(19, 138, 91, 0.12);
+      box-shadow: 0 0 0 3px rgba(95, 139, 104, 0.16);
     }
 
     .xap-status[data-tone="warning"]::before {
       background: var(--xap-warning);
-      box-shadow: 0 0 0 3px rgba(161, 95, 0, 0.13);
+      box-shadow: 0 0 0 3px rgba(164, 120, 56, 0.15);
     }
 
     .xap-status[data-tone="error"]::before {
       background: var(--xap-danger);
-      box-shadow: 0 0 0 3px rgba(179, 38, 30, 0.12);
+      box-shadow: 0 0 0 3px rgba(168, 93, 79, 0.15);
     }
 
     #xap-panel[data-mode="importing"] .xap-status {
