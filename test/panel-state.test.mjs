@@ -75,3 +75,38 @@ test("keeps only import progress controls visible during import", () => {
   assert.equal(view.buttons.reload.visible, false);
   assert.equal(view.buttons.clearDraft.visible, false);
 });
+
+test("derives import progress from image preparation status", () => {
+  const panelState = loadPanelState();
+  const progress = panelState.importProgressFromStatus("正在准备图片 3/10: [XAP-IMG-03]", {
+    totalImages: 10,
+  });
+
+  assert.equal(progress.percent, 6);
+  assert.equal(progress.label, "准备图片 3/10");
+  assert.equal(progress.indeterminate, false);
+});
+
+test("derives import progress from X upload marker status", () => {
+  const panelState = loadPanelState();
+  const progress = panelState.importProgressFromStatus(
+    "正在上传第 1 批 4/5（第 1/3 次）: [XAP-IMG-04]",
+    { totalImages: 10 },
+  );
+
+  assert.equal(progress.percent, 43);
+  assert.equal(progress.label, "上传图片 4/10");
+  assert.equal(progress.indeterminate, false);
+});
+
+test("marks completed import progress as done", () => {
+  const panelState = loadPanelState();
+  const progress = panelState.importProgressFromStatus(
+    "自动导入完成：上传 10/10 张图，重排 10/10，marker 已处理。",
+    { totalImages: 10 },
+  );
+
+  assert.equal(progress.percent, 100);
+  assert.equal(progress.label, "导入完成");
+  assert.equal(progress.indeterminate, false);
+});

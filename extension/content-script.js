@@ -1,5 +1,5 @@
 const helperBase = "http://127.0.0.1:49231";
-const XAP_CONTENT_VERSION = "context-safe-storage-v4";
+const XAP_CONTENT_VERSION = "context-safe-storage-v5";
 const X_ARTICLE_MAX_IMAGES = 25;
 const FEISHU_MEDIA_TIMEOUT_MS = 15_000;
 const FEISHU_MEDIA_MAX_ATTEMPTS = 3;
@@ -12,6 +12,7 @@ const state = {
   collapsed: false,
   preparing: false,
   importing: false,
+  importProgress: null,
 };
 
 const els = {};
@@ -47,6 +48,7 @@ function setStatus(message) {
       delete els.status.dataset.tone;
     }
   }
+  updateImportProgress(message);
 }
 
 function uploadableContentImages(draft) {
@@ -177,6 +179,37 @@ async function markButtonDone(button, text) {
   button.textContent = text;
   await new Promise((resolve) => setTimeout(resolve, 900));
   button.textContent = originalText;
+}
+
+function updateImportProgress(message) {
+  if (!state.importing || !globalThis.XAPPanelState?.importProgressFromStatus) return;
+  const progress = globalThis.XAPPanelState.importProgressFromStatus(message, {
+    totalImages: state.images.length,
+  });
+  if (!progress) return;
+  state.importProgress = progress;
+  renderImportProgress();
+}
+
+function renderImportProgress() {
+  if (!els.import) return;
+  const progress = state.importProgress;
+  if (!state.importing || !progress) {
+    delete els.import.dataset.progress;
+    delete els.import.dataset.indeterminate;
+    els.import.style.removeProperty("--xap-progress");
+    return;
+  }
+
+  delete els.import.dataset.busy;
+  els.import.dataset.progress = "true";
+  if (progress.indeterminate) {
+    els.import.dataset.indeterminate = "true";
+  } else {
+    delete els.import.dataset.indeterminate;
+  }
+  els.import.style.setProperty("--xap-progress", `${progress.percent}%`);
+  els.import.textContent = progress.label || "导入中";
 }
 
 function injectStyles() {
@@ -394,6 +427,16 @@ function injectStyles() {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
+    #xap-panel[data-mode="importing"] .xap-actions[data-section="draft-actions"] {
+      grid-template-columns: 1fr;
+    }
+
+    #xap-panel[data-mode="importing"] .xap-actions[data-section="draft-actions"] > button[data-action="import"] {
+      grid-column: 1 / -1;
+      justify-self: stretch;
+      width: 100%;
+    }
+
     #xap-panel button {
       min-height: 36px;
       border: 1px solid var(--xap-line);
@@ -433,6 +476,75 @@ function injectStyles() {
       background: var(--xap-primary-strong);
     }
 
+    #xap-panel button[data-progress="true"] {
+      --xap-progress: 0%;
+      position: relative;
+      overflow: hidden;
+      border-color: rgba(19, 138, 91, 0.34);
+      color: #ffffff;
+      background:
+        linear-gradient(
+          90deg,
+          #0f7f56 0%,
+          #13a366 42%,
+          #6fd087 var(--xap-progress),
+          #8dc3ee var(--xap-progress),
+          #8dc3ee 100%
+        );
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+    }
+
+    #xap-panel button[data-progress="true"]::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.08),
+        rgba(255, 255, 255, 0.22),
+        rgba(255, 255, 255, 0.08)
+      );
+      transform: translateX(-120%);
+      animation: xap-progress-sheen 1.45s ease-in-out infinite;
+    }
+
+    #xap-panel button[data-progress="true"]::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+      pointer-events: none;
+    }
+
+    #xap-panel button[data-progress="true"][data-indeterminate="true"] {
+      background:
+        linear-gradient(90deg, rgba(15, 127, 86, 0.95), rgba(19, 163, 102, 0.95))
+          0 0 / 42% 100% no-repeat,
+        #8dc3ee;
+      animation: xap-progress-slide 1.1s ease-in-out infinite;
+    }
+
+    @keyframes xap-progress-sheen {
+      55%,
+      100% {
+        transform: translateX(120%);
+      }
+    }
+
+    @keyframes xap-progress-slide {
+      0% {
+        background-position:
+          -42% 0,
+          0 0;
+      }
+      100% {
+        background-position:
+          142% 0,
+          0 0;
+      }
+    }
+
     #xap-panel button.xap-danger {
       color: var(--xap-danger);
       border-color: rgba(179, 38, 30, 0.22);
@@ -449,6 +561,10 @@ function injectStyles() {
       opacity: 0.55;
       box-shadow: none;
       transform: none;
+    }
+
+    #xap-panel button[data-progress="true"]:disabled {
+      opacity: 1;
     }
 
     #xap-panel button[data-busy="true"] {
@@ -510,6 +626,21 @@ function injectStyles() {
     .xap-status[data-tone="error"]::before {
       background: var(--xap-danger);
       box-shadow: 0 0 0 3px rgba(179, 38, 30, 0.12);
+    }
+
+    #xap-panel[data-mode="importing"] .xap-status {
+      min-height: auto;
+      border: 0;
+      border-radius: 0;
+      padding: 0 2px;
+      color: var(--xap-muted);
+      background: transparent;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    #xap-panel[data-mode="importing"] .xap-status::before {
+      display: none;
     }
 
     @media (max-width: 520px) {
@@ -652,7 +783,7 @@ function render() {
   els.import.textContent = state.importing ? "导入中" : "自动导入正文+图片";
   els.docUrl.disabled = state.preparing || state.importing;
 
-  if (state.importing) {
+  if (state.importing && !state.importProgress) {
     els.import.dataset.busy = "true";
   } else {
     delete els.import.dataset.busy;
@@ -673,6 +804,8 @@ function render() {
   if (state.images.length > 0 && !els.status.textContent) {
     setStatus("准备就绪。点击“自动导入正文+图片”开始。");
   }
+
+  renderImportProgress();
 }
 
 function applyDraftPayload(payload) {
@@ -1310,6 +1443,7 @@ async function importBodyAndImages() {
   if (state.importing) return;
 
   state.importing = true;
+  state.importProgress = null;
   render();
   setStatus("正在准备自动导入...");
 
@@ -1368,6 +1502,7 @@ async function importBodyAndImages() {
     setStatus(`自动导入失败：${error.message}`);
   } finally {
     state.importing = false;
+    state.importProgress = null;
     render();
   }
 }
