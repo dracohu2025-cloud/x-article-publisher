@@ -329,6 +329,13 @@ function injectStyles() {
       font-weight: 560;
     }
 
+    .xap-brand-version {
+      margin-left: 6px;
+      color: color-mix(in srgb, var(--xap-muted) 54%, transparent);
+      font-size: 11px;
+      font-weight: 620;
+    }
+
     .xap-body {
       display: grid;
       gap: 12px;
@@ -681,7 +688,7 @@ function createPanel() {
         <div class="xap-brand-mark" aria-hidden="true">X</div>
         <div class="xap-brand-text">
           <span class="xap-brand-title">XAP 导入</span>
-          <span class="xap-brand-subtitle">Feishu to X Articles</span>
+          <span class="xap-brand-subtitle">Feishu to X Articles <span class="xap-brand-version">v6</span></span>
         </div>
       </div>
       <button type="button" class="xap-ghost" data-action="toggle">收起</button>
