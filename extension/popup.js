@@ -11,6 +11,14 @@ const els = {
 
 function setStatus(message) {
   els.status.textContent = message;
+  const value = String(message || "");
+  if (/失败|无法|错误|unknown|error/i.test(value)) {
+    els.status.dataset.tone = "error";
+  } else if (/正在|处理中|生成|读取/i.test(value)) {
+    els.status.dataset.tone = "warning";
+  } else {
+    delete els.status.dataset.tone;
+  }
 }
 
 function renderLatestDraft(payload) {

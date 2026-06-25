@@ -1,15 +1,40 @@
+:root {
+  color-scheme: light;
+  --xap-text: #111418;
+  --xap-muted: #63717f;
+  --xap-subtle: #8a96a3;
+  --xap-line: #d9e1e8;
+  --xap-line-strong: #c8d2db;
+  --xap-surface: #ffffff;
+  --xap-surface-soft: #f5f8fa;
+  --xap-surface-raised: #fbfcfd;
+  --xap-primary: #1687d9;
+  --xap-primary-strong: #0f6fb7;
+  --xap-success: #138a5b;
+  --xap-warning: #a15f00;
+  --xap-danger: #b3261e;
+  --xap-shadow: 0 14px 34px rgba(31, 45, 61, 0.16);
+}
+
+* {
+  box-sizing: border-box;
+}
+
 body {
-  width: 320px;
+  width: 344px;
   margin: 0;
-  color: #0f1419;
-  background: #fff;
-  font: 13px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--xap-text);
+  background:
+    linear-gradient(180deg, #f7fafc 0%, #ffffff 52%),
+    var(--xap-surface);
+  font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
 }
 
 main {
   display: grid;
-  gap: 12px;
-  padding: 14px;
+  gap: 14px;
+  padding: 16px;
 }
 
 h1,
@@ -18,56 +43,154 @@ p {
   margin: 0;
 }
 
+.app-header {
+  display: grid;
+  grid-template-columns: 38px 1fr;
+  gap: 11px;
+  align-items: center;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--xap-line);
+  border-radius: 8px;
+  color: #ffffff;
+  background: #121820;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  font-size: 15px;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
 h1 {
-  font-size: 16px;
-  line-height: 1.3;
+  font-size: 15px;
+  line-height: 1.25;
+  letter-spacing: 0;
 }
 
 h2 {
-  font-size: 13px;
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--xap-text);
+  font-size: 14px;
+  line-height: 1.35;
+  font-weight: 720;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .hint,
 #latestMeta,
 #status {
-  color: #536471;
+  color: var(--xap-muted);
+}
+
+.hint {
+  margin-top: 2px;
 }
 
 .actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
-  flex-wrap: wrap;
 }
 
 button {
-  border: 0;
-  border-radius: 6px;
-  padding: 8px 10px;
-  color: #0f1419;
-  background: #eff3f4;
-  font-weight: 650;
+  min-height: 36px;
+  border: 1px solid var(--xap-line);
+  border-radius: 8px;
+  padding: 8px 11px;
+  color: var(--xap-text);
+  background: var(--xap-surface-soft);
+  font: inherit;
+  font-weight: 680;
   cursor: pointer;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
 }
 
-#openX {
-  color: #fff;
-  background: #1d9bf0;
+button:hover {
+  border-color: var(--xap-line-strong);
+  background: #eef3f6;
+  box-shadow: 0 6px 16px rgba(31, 45, 61, 0.12);
+  transform: translateY(-1px);
+}
+
+button:active {
+  transform: translateY(0);
+}
+
+button.primary {
+  border-color: var(--xap-primary);
+  color: #ffffff;
+  background: var(--xap-primary);
+}
+
+button.primary:hover {
+  border-color: var(--xap-primary-strong);
+  background: var(--xap-primary-strong);
 }
 
 #latest,
 #status:not(:empty) {
+  border: 1px solid var(--xap-line);
+  border-radius: 8px;
+  background: var(--xap-surface-raised);
+}
+
+#latest {
   display: grid;
-  gap: 4px;
-  border: 1px solid #dbe3e8;
-  border-radius: 6px;
-  padding: 8px;
-  background: #f7f9f9;
+  gap: 6px;
+  padding: 11px;
+  box-shadow: 0 8px 20px rgba(31, 45, 61, 0.08);
 }
 
 #latest[hidden] {
   display: none;
 }
 
-#latestTitle {
-  font-weight: 650;
+.section-label {
+  color: var(--xap-subtle);
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+#latestMeta {
+  font-size: 12px;
+}
+
+#status:not(:empty) {
+  position: relative;
+  min-height: 38px;
+  padding: 9px 10px 9px 30px;
+  word-break: break-word;
+}
+
+#status:not(:empty)::before {
+  content: "";
+  position: absolute;
+  top: 14px;
+  left: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--xap-success);
+  box-shadow: 0 0 0 3px rgba(19, 138, 91, 0.12);
+}
+
+#status[data-tone="error"]::before {
+  background: var(--xap-danger);
+  box-shadow: 0 0 0 3px rgba(179, 38, 30, 0.12);
+}
+
+#status[data-tone="warning"]::before {
+  background: var(--xap-warning);
+  box-shadow: 0 0 0 3px rgba(161, 95, 0, 0.13);
 }

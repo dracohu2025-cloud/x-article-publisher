@@ -8,17 +8,22 @@
   </head>
   <body>
     <main>
-      <h1>X Article Publisher</h1>
-      <p class="hint">主流程已移到 X Articles 页面右下角面板。</p>
+      <header class="app-header">
+        <div class="brand-mark" aria-hidden="true">X</div>
+        <div>
+          <h1>X Article Publisher</h1>
+          <p class="hint">飞书到 X Articles 的发布助手</p>
+        </div>
+      </header>
 
       <div class="actions">
-        <button id="openX" type="button">打开 X Articles</button>
+        <button id="openX" class="primary" type="button">打开 X Articles</button>
         <button id="checkHelper" type="button">检查 helper</button>
       </div>
 
       <section id="latest" hidden>
-        <h2>最近草稿</h2>
-        <p id="latestTitle"></p>
+        <div class="section-label">最近草稿</div>
+        <h2 id="latestTitle"></h2>
         <p id="latestMeta"></p>
       </section>
 

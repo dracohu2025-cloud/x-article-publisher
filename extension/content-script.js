@@ -1,5 +1,5 @@
 const helperBase = "http://127.0.0.1:49231";
-const XAP_CONTENT_VERSION = "context-safe-storage-v3";
+const XAP_CONTENT_VERSION = "context-safe-storage-v4";
 const X_ARTICLE_MAX_IMAGES = 25;
 const FEISHU_MEDIA_TIMEOUT_MS = 15_000;
 const FEISHU_MEDIA_MAX_ATTEMPTS = 3;
@@ -38,6 +38,14 @@ function isUploadableImage(image) {
 function setStatus(message) {
   if (els.status) {
     els.status.textContent = message;
+    const value = String(message || "");
+    if (/失败|无法|错误|超时|先不要发布|not reachable|failed|error/i.test(value)) {
+      els.status.dataset.tone = "error";
+    } else if (/正在|准备|读取|生成|上传|导入|处理|检查|未完整|保留|跳过/i.test(value)) {
+      els.status.dataset.tone = "warning";
+    } else {
+      delete els.status.dataset.tone;
+    }
   }
 }
 
@@ -178,22 +186,45 @@ function injectStyles() {
   style.id = "xap-style";
   style.textContent = `
     #xap-panel {
+      --xap-text: #101418;
+      --xap-muted: #667584;
+      --xap-subtle: #8b98a5;
+      --xap-line: #d7e0e7;
+      --xap-line-strong: #c5d0da;
+      --xap-surface: #ffffff;
+      --xap-surface-soft: #f5f8fa;
+      --xap-surface-raised: #fbfcfd;
+      --xap-primary: #1687d9;
+      --xap-primary-strong: #0f6fb7;
+      --xap-success: #138a5b;
+      --xap-warning: #a15f00;
+      --xap-danger: #b3261e;
       position: fixed;
       right: 16px;
       bottom: 16px;
       z-index: 2147483647;
-      width: 360px;
+      width: 410px;
       max-width: calc(100vw - 32px);
-      color: #0f1419;
-      background: #fff;
-      border: 1px solid #cfd9de;
+      max-height: calc(100vh - 48px);
+      overflow: hidden;
+      color: var(--xap-text);
+      background: var(--xap-surface);
+      border: 1px solid var(--xap-line);
       border-radius: 8px;
-      box-shadow: 0 10px 28px rgba(15, 20, 25, 0.2);
-      font: 13px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      box-shadow:
+        0 24px 60px rgba(15, 23, 42, 0.18),
+        0 4px 14px rgba(15, 23, 42, 0.08);
+      font: 13px/1.48 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        sans-serif;
+      letter-spacing: 0;
     }
 
     #xap-panel[data-collapsed="true"] .xap-body {
       display: none;
+    }
+
+    #xap-panel[data-collapsed="true"] {
+      width: 220px;
     }
 
     #xap-panel [hidden] {
@@ -204,38 +235,103 @@ function injectStyles() {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
-      padding: 10px 12px;
-      border-bottom: 1px solid #eff3f4;
-      font-weight: 700;
+      gap: 12px;
+      padding: 13px 14px;
+      border-bottom: 1px solid #edf2f5;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    }
+
+    .xap-brand {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 10px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .xap-brand-mark {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      color: #ffffff;
+      background: #121820;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+      font-size: 14px;
+      font-weight: 780;
+    }
+
+    .xap-brand-text {
+      display: grid;
+      gap: 1px;
+      min-width: 0;
+    }
+
+    .xap-brand-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--xap-text);
+      font-size: 15px;
+      font-weight: 760;
+    }
+
+    .xap-brand-subtitle {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--xap-muted);
+      font-size: 12px;
+      font-weight: 560;
     }
 
     .xap-body {
       display: grid;
-      gap: 10px;
-      padding: 12px;
+      gap: 12px;
+      max-height: calc(100vh - 124px);
+      overflow: auto;
+      padding: 14px;
+      background:
+        linear-gradient(180deg, rgba(248, 250, 252, 0.72) 0%, rgba(255, 255, 255, 0) 44px),
+        var(--xap-surface);
     }
 
     .xap-field {
       display: grid;
-      gap: 6px;
+      gap: 7px;
     }
 
     .xap-field label {
-      font-weight: 650;
+      color: var(--xap-text);
+      font-size: 12px;
+      font-weight: 720;
     }
 
     #xap-doc-url {
       box-sizing: border-box;
       width: 100%;
-      min-height: 72px;
+      min-height: 88px;
       resize: vertical;
-      border: 1px solid #cfd9de;
-      border-radius: 6px;
-      padding: 8px;
-      color: #0f1419;
-      background: #fff;
+      border: 1px solid var(--xap-line);
+      border-radius: 8px;
+      padding: 10px 11px;
+      color: var(--xap-text);
+      background: #ffffff;
       font: inherit;
+      line-height: 1.45;
+      outline: none;
+      transition:
+        border-color 0.16s ease,
+        box-shadow 0.16s ease,
+        background 0.16s ease;
+    }
+
+    #xap-doc-url:focus {
+      border-color: rgba(22, 135, 217, 0.68);
+      box-shadow: 0 0 0 3px rgba(22, 135, 217, 0.12);
+      background: #ffffff;
     }
 
     #xap-doc-url:disabled {
@@ -251,51 +347,108 @@ function injectStyles() {
     }
 
     .xap-title {
-      font-weight: 700;
-      white-space: nowrap;
+      display: -webkit-box;
+      color: var(--xap-text);
+      font-size: 14px;
+      font-weight: 760;
+      line-height: 1.35;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
     }
 
     .xap-summary {
       display: grid;
-      gap: 4px;
+      gap: 7px;
+      border: 1px solid var(--xap-line);
+      border-radius: 8px;
+      padding: 11px;
+      background: var(--xap-surface-raised);
+      box-shadow: 0 8px 22px rgba(31, 45, 61, 0.07);
     }
 
     .xap-counter {
-      color: #536471;
+      color: var(--xap-muted);
+      font-size: 12px;
     }
 
     .xap-hint {
       display: -webkit-box;
-      color: #536471;
+      color: var(--xap-muted);
+      font-size: 12px;
       -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
     }
 
     .xap-actions {
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
-      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .xap-actions[data-section="prepare-actions"] {
+      grid-template-columns: minmax(0, 148px);
+    }
+
+    .xap-actions[data-section="draft-actions"] {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     #xap-panel button {
-      border: 0;
-      border-radius: 6px;
-      padding: 7px 9px;
-      color: #0f1419;
-      background: #eff3f4;
+      min-height: 36px;
+      border: 1px solid var(--xap-line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      color: var(--xap-text);
+      background: var(--xap-surface-soft);
       font: inherit;
-      font-weight: 650;
+      font-weight: 700;
       cursor: pointer;
+      transition:
+        background 0.16s ease,
+        border-color 0.16s ease,
+        box-shadow 0.16s ease,
+        transform 0.16s ease;
+    }
+
+    #xap-panel button:hover:not(:disabled) {
+      border-color: var(--xap-line-strong);
+      background: #eef3f6;
+      box-shadow: 0 6px 16px rgba(31, 45, 61, 0.12);
+      transform: translateY(-1px);
+    }
+
+    #xap-panel button:active:not(:disabled) {
+      transform: translateY(0);
     }
 
     #xap-panel button.xap-primary {
       color: #fff;
-      background: #1d9bf0;
+      border-color: var(--xap-primary);
+      background: var(--xap-primary);
+    }
+
+    #xap-panel button.xap-primary:hover:not(:disabled) {
+      border-color: var(--xap-primary-strong);
+      background: var(--xap-primary-strong);
+    }
+
+    #xap-panel button.xap-danger {
+      color: var(--xap-danger);
+      border-color: rgba(179, 38, 30, 0.22);
+      background: rgba(179, 38, 30, 0.06);
+    }
+
+    #xap-panel button.xap-ghost {
+      min-width: 58px;
+      background: #ffffff;
     }
 
     #xap-panel button:disabled {
       cursor: not-allowed;
       opacity: 0.55;
+      box-shadow: none;
+      transform: none;
     }
 
     #xap-panel button[data-busy="true"] {
@@ -322,9 +475,54 @@ function injectStyles() {
     }
 
     .xap-status {
-      min-height: 18px;
-      color: #536471;
+      position: relative;
+      min-height: 34px;
+      border: 1px solid var(--xap-line);
+      border-radius: 8px;
+      padding: 8px 10px 8px 30px;
+      color: var(--xap-muted);
+      background: var(--xap-surface-raised);
+      font-size: 12px;
       word-break: break-word;
+    }
+
+    .xap-status:empty {
+      display: none;
+    }
+
+    .xap-status::before {
+      content: "";
+      position: absolute;
+      top: 13px;
+      left: 12px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--xap-success);
+      box-shadow: 0 0 0 3px rgba(19, 138, 91, 0.12);
+    }
+
+    .xap-status[data-tone="warning"]::before {
+      background: var(--xap-warning);
+      box-shadow: 0 0 0 3px rgba(161, 95, 0, 0.13);
+    }
+
+    .xap-status[data-tone="error"]::before {
+      background: var(--xap-danger);
+      box-shadow: 0 0 0 3px rgba(179, 38, 30, 0.12);
+    }
+
+    @media (max-width: 520px) {
+      #xap-panel {
+        right: 10px;
+        bottom: 10px;
+        max-width: calc(100vw - 20px);
+      }
+
+      .xap-actions,
+      .xap-actions[data-section="draft-actions"] {
+        grid-template-columns: 1fr;
+      }
     }
   `;
   document.documentElement.append(style);
@@ -339,8 +537,14 @@ function createPanel() {
   panel.dataset.collapsed = "false";
   panel.innerHTML = `
     <div class="xap-header">
-      <span>XAP 导入</span>
-      <button type="button" data-action="toggle">收起</button>
+      <div class="xap-brand">
+        <div class="xap-brand-mark" aria-hidden="true">X</div>
+        <div class="xap-brand-text">
+          <span class="xap-brand-title">XAP 导入</span>
+          <span class="xap-brand-subtitle">Feishu to X Articles</span>
+        </div>
+      </div>
+      <button type="button" class="xap-ghost" data-action="toggle">收起</button>
     </div>
     <div class="xap-body">
       <div class="xap-field" data-section="input">
@@ -359,7 +563,7 @@ function createPanel() {
         <button type="button" data-action="copy-title">复制标题</button>
         <button type="button" class="xap-primary" data-action="import">自动导入正文+图片</button>
         <button type="button" data-action="reload">刷新草稿</button>
-        <button type="button" data-action="clear-draft">清空草稿</button>
+        <button type="button" class="xap-danger" data-action="clear-draft">清空草稿</button>
       </div>
       <div class="xap-status" data-role="status"></div>
     </div>
@@ -440,6 +644,7 @@ function render() {
   createPanel();
 
   const view = globalThis.XAPPanelState.buildPanelView(state);
+  els.panel.dataset.mode = view.mode;
 
   els.title.textContent = state.draft?.title || "未加载草稿";
   els.counter.textContent = draftCounterText(state.draft);
